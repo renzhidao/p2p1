@@ -1,4 +1,3 @@
-
 // EasyTier Web 增强版（支持“邀请链接/二维码”与可选信令服务器发现）
 class EasyTierWeb {
     constructor() {
@@ -545,12 +544,3 @@ window.addEventListener('beforeunload', (e) => {
         e.returnValue = '关闭页面将断开连接，确定吗？';
     }
 });
-
-——
-
-说明（很快看一眼就行）
-- 直接 GitHub Pages 打开，点“连接网络”，复制“加入链接”/扫码，另一台打开即可连上
-- 若要“同网络名自动发现”，把 server.js 部署到 Render/Railway，前端填 wss 地址
-- 如果还想更稳，后面加一个 TURN 也行，但这一步不是必需
-
-需要我顺带给你一个一键部署 Render 的按钮/Procfile 也可以，招呼我就加。
