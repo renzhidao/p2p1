@@ -170,15 +170,13 @@
     };
 
     self.showShare=function(){
-      var base=window.location.origin+window.location.pathname; // 保持原样
+      var base=window.location.origin+window.location.pathname;
       var url = base + '?peer='+encodeURIComponent(self.localId);
       var input=document.getElementById('shareLink'),
-          qrBox=document.getElementById('qrBox'),
           qr=document.getElementById('qr');
       if(input) input.value=url;
       if(qr){
         qr.innerHTML='';
-        // 关键修复：固定 256px，不缩放；白底在外层 .qr-wrap 提供静区
         new QRCode(qr,{text:url,width:256,height:256,correctLevel:QRCode.CorrectLevel.M});
       }
       var share=document.getElementById('share'); if(share) share.style.display='block';
@@ -410,6 +408,7 @@
         self.conns[pid].open=true;
         self.updateInfo();
         try{
+          // 关键：发送 hello（携带昵称和网络信息）
           c.send({
             type:'hello',
             id:self.localId,
@@ -419,6 +418,11 @@
             fullList:Object.keys(self.fullSources)
           });
         }catch(e){}
+        // UI 打开较晚时，立即刷新联系人列表
+        if(self._classic && self._classic.renderContacts){
+          var arr=[]; for(var k in self.conns){ if(self.conns[k].open) arr.push({id:k,name:self.displayNames[k]||('节点 '+shortId(k))}); }
+          self._classic.renderContacts(arr, self.activePeer);
+        }
       });
 
       c.on('data', function(d){
@@ -531,6 +535,10 @@
       c.on('close', function(){
         delete self.conns[pid];
         self.updateInfo();
+        if(self._classic && self._classic.renderContacts){
+          var arr=[]; for(var k in self.conns){ if(self.conns[k].open) arr.push({id:k,name:self.displayNames[k]||('节点 '+shortId(k))}); }
+          self._classic.renderContacts(arr, self.activePeer);
+        }
       });
 
       c.on('error', function(err){ /* 忽略 */ });
@@ -796,6 +804,18 @@
       var arr=[]; for (var k in app.conns){ if(app.conns[k].open) arr.push({id:k,name: app.displayNames[k]||('节点 '+k.substring(0,8))}); }
       app._classic.renderContacts(arr, app.activePeer);
     }); }
+
+    // 初次渲染联系人（UI 在已有连接后打开也能看到列表）
+    (function initialRender(){
+      if (!contactList || !app || !app._classic || !app._classic.renderContacts) return;
+      var arr = [];
+      for (var pid in app.conns) {
+        if (!app.conns.hasOwnProperty(pid)) continue;
+        if (!app.conns[pid].open) continue;
+        arr.push({ id: pid, name: app.displayNames[pid] || ('节点 ' + pid.substring(0,8)) });
+      }
+      app._classic.renderContacts(arr, app.activePeer);
+    })();
 
     app._classic.updateStatus();
   }
