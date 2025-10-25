@@ -665,12 +665,12 @@
       }).catch(function(){ alert('无法获取摄像头/麦克风'); });
     };
 
-    bindClassicUI(self);
+    // ✅ 删除了这一行：bindClassicUI(self);
     return self;
   })();
 
   function bindClassicUI(app){
-    if (!window.CLASSIC_UI) return;  // ✅ 修改1：去掉双下划线
+    if (!window.CLASSIC_UI) return;
 
     var editor = document.getElementById('editor');
     var sendBtn = document.getElementById('sendBtn');
@@ -851,7 +851,7 @@
   }
 
   // 关键修复：classic 页面复用 opener.app（含最多 1 秒重试，杜绝时序竞态）
-  if (window.CLASSIC_UI && window.opener) {  // ✅ 修改2：去掉双下划线
+  if (window.CLASSIC_UI && window.opener) {
     (function tryReuse(i){
       if (window.opener.app) {
         window.app = window.opener.app;
@@ -865,6 +865,6 @@
     })(0);
   } else {
     window.app = app;
-    if (window.CLASSIC_UI) bindClassicUI(app);  // ✅ 修改3：去掉双下划线
+    if (window.CLASSIC_UI) bindClassicUI(app);
   }
 })();
