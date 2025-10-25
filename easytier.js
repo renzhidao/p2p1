@@ -185,8 +185,9 @@
         if(navigator.clipboard&&navigator.clipboard.writeText){
           navigator.clipboard.writeText(txt).then(function(){ alert('已复制全部日志'); });
         }else{
-          var ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta);
-          ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('已复制全部日志');
+          var ta=document.createElement('textarea'); ta.value=txt;
+          document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+          document.body.removeChild(ta); alert('已复制全部日志');
         }
       }catch(e){ alert('复制失败：'+e.message); }
     };
