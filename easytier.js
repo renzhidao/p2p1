@@ -37,20 +37,21 @@
   }
   function fileHashMeta(file){ return sha256(file.name+'|'+file.size); }
 
-  // ✅ 新增：文件类型判断工具函数
-  function ext(name){ 
-    var m=String(name||'').match(/\.([a-z0-9]+)$/i); 
-    return m?m[1].toLowerCase():''; 
+  // 文件类型兜底：mime 为空时按扩展名识别
+  function ext(name){
+    var m=String(name||'').match(/\.([a-z0-9]+)$/i);
+    return m? m[1].toLowerCase() : '';
   }
-  function isVideo(mime,name){ 
-    if((mime||'').indexOf('video/')===0) return true; 
+  function isVideo(mime,name){
+    if((mime||'').indexOf('video/')===0) return true;
     return ['mp4','webm','mkv','mov','m4v','avi','ts','3gp','flv','wmv'].indexOf(ext(name))!==-1;
   }
-  function isImage(mime,name){ 
-    if((mime||'').indexOf('image/')===0) return true; 
+  function isImage(mime,name){
+    if((mime||'').indexOf('image/')===0) return true;
     return ['jpg','jpeg','png','gif','webp','bmp','heic','heif','avif','svg'].indexOf(ext(name))!==-1;
   }
 
+  // IndexedDB
   var idb, idbReady=false;
   (function openIDB(){
     try{
@@ -65,39 +66,52 @@
     }catch(e){ idbReady=false; }
   })();
   function idbPutFull(hash, blob, meta){
-    if(!idbReady) return;
-    try{ var tx=idb.transaction('files','readwrite'); tx.objectStore('files').put({hash:hash, blob:blob, meta:meta, ts:Date.now()}); }catch(e){}
+    if(!idbReady || !hash) return;
+    try{
+      var tx=idb.transaction('files','readwrite');
+      tx.objectStore('files').put({hash:hash, blob:blob, meta:meta, ts:Date.now()});
+    }catch(e){}
   }
   function idbGetFull(hash, cb){
     if(!idbReady) return cb(null);
     try{
-      var tx=idb.transaction('files','readonly'); var rq=tx.objectStore('files').get(hash);
-      rq.onsuccess=function(){ cb(rq.result||null); }; rq.onerror=function(){ cb(null); };
+      var tx=idb.transaction('files','readonly');
+      var rq=tx.objectStore('files').get(hash);
+      rq.onsuccess=function(){ cb(rq.result||null); };
+      rq.onerror=function(){ cb(null); };
     }catch(e){ cb(null); }
   }
   function idbPutPart(hash, meta){
-    if(!idbReady) return;
-    try{ var tx=idb.transaction('parts','readwrite'); tx.objectStore('parts').put({hash:hash, meta:meta, ts:Date.now()}); }catch(e){}
+    if(!idbReady || !hash) return;
+    try{
+      var tx=idb.transaction('parts','readwrite');
+      tx.objectStore('parts').put({hash:hash, meta:meta, ts:Date.now()});
+    }catch(e){}
   }
   function idbGetPart(hash, cb){
     if(!idbReady) return cb(null);
     try{
-      var tx=idb.transaction('parts','readonly'); var rq=tx.objectStore('parts').get(hash);
-      rq.onsuccess=function(){ cb(rq.result||null); }; rq.onerror=function(){ cb(null); };
+      var tx=idb.transaction('parts','readonly');
+      var rq=tx.objectStore('parts').get(hash);
+      rq.onsuccess=function(){ cb(rq.result||null); };
+      rq.onerror=function(){ cb(null); };
     }catch(e){ cb(null); }
   }
   function idbDelPart(hash){
-    if(!idbReady) return;
-    try{ var tx=idb.transaction('parts','readwrite'); tx.objectStore('parts').delete(hash); }catch(e){}
+    if(!idbReady || !hash) return;
+    try{
+      var tx=idb.transaction('parts','readwrite');
+      tx.objectStore('parts').delete(hash);
+    }catch(e){}
   }
 
+  // 视频缩略图
   function extractVideoThumbnail(file, cb){
     var video=document.createElement('video');
     video.preload='metadata'; video.muted=true; video.playsInline=true;
     var url=URL.createObjectURL(file);
     var cleaned=false, clean=function(){ if(cleaned) return; cleaned=true; try{URL.revokeObjectURL(url);}catch(e){} };
     video.src=url;
-    // ✅ 修改：loadeddata → loadedmetadata 更稳定
     video.addEventListener('loadedmetadata', function(){
       try{ video.currentTime = Math.min(1, (video.duration||1)*0.1); }catch(e){ clean(); cb(null); }
     }, {once:true});
@@ -228,6 +242,12 @@
     function fileLink(ui,url,name,size){ if(self._classic && typeof self._classic.showFileLink==='function') self._classic.showFileLink(ui,url,name,size); }
     function updProg(ui,p){ if(self._classic && typeof self._classic.updateProgress==='function') self._classic.updateProgress(ui,p); }
 
+    // 跨窗口安全创建 Blob URL：优先在当前页创建
+    function mkUrl(blob){
+      if(self._classic && typeof self._classic.mkUrl === 'function') return self._classic.mkUrl(blob);
+      return URL.createObjectURL(blob);
+    }
+
     self.sendMsg=function(){
       var val='';
       if (self._classic && typeof self._classic.getEditorText==='function') val=self._classic.getEditorText();
@@ -257,6 +277,7 @@
       if(!fi||!fi.files||fi.files.length===0){ alert('请选择文件'); return; }
       self.sendFilesFrom([].slice.call(fi.files)); fi.value='';
     };
+
     self.sendFilesFrom=function(files){
       var targets=[];
       if (self.activePeer==='all'){
@@ -268,13 +289,11 @@
 
       files.forEach(function(file){
         var ui = placeholder(file.name, file.size, true);
-        var localUrl = URL.createObjectURL(file);
-        // ✅ 修改：用 isImage/isVideo 判断
+        var localUrl = mkUrl(file);
         if (isImage(file.type, file.name)) showImg(ui, localUrl);
         else if (isVideo(file.type, file.name)){
           extractVideoThumbnail(file, function(p){ if (ui) ui.poster=p; showVid(ui, localUrl, '已发送'); });
         } else { fileLink(ui, localUrl, file.name, file.size); }
-        setTimeout(function(){ try{URL.revokeObjectURL(localUrl);}catch(e){} },60000);
 
         fileHashMeta(file).then(function(hash){
           targets.forEach(function(pid){ enqueueFile(pid,file,hash); });
@@ -338,7 +357,22 @@
             var nowTs=Date.now();
             if(pct!==lastPct && (nowTs-lastTs>300 || pct===100)){ lastTs=nowTs; lastPct=pct; }
             if(state.off<file.size){ setTimeout(readNext,0); }
-            else { try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){} delete st._curSend[id]; done&&done(); }
+            else {
+              try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){}
+              delete st._curSend[id];
+
+              try{
+                idbPutFull(hash||'', file, {
+                  name:file.name,
+                  size:file.size,
+                  mime:file.type||'application/octet-stream'
+                });
+                self.fullSources[hash||'']=self.fullSources[hash||'']||new Set();
+                self.fullSources[hash||''].add(self.localId);
+              }catch(e){}
+
+              done&&done();
+            }
           });
         };
         function readNext(){
@@ -375,6 +409,12 @@
         self.updateInfo();
         self.showShare();
         self.log('已连接，ID='+id);
+
+        if (navigator.storage && navigator.storage.persist){
+          navigator.storage.persist().then(function(granted){
+            self.log('PERSISTENCE: '+(granted?'granted':'not granted'));
+          }).catch(function(){});
+        }
 
         var toDial=getPeerParam();
         if(toDial){ self.log('准备连接对端：'+toDial); setTimeout(function(){ connectPeer(toDial); },400); }
@@ -482,27 +522,24 @@
           else if(d.type==='file-begin'){
             var h=d.hash||'';
             var ui=placeholder(d.name||'文件', d.size||0, false);
-            
-            // ✅ 修改：mime 类型兜底修正
+
             var mime = d.mime || '';
             if (!isVideo(mime, d.name) && !isImage(mime, d.name) && (!mime || mime==='application/octet-stream')) {
               if (isVideo('', d.name)) mime = 'video/unknown';
               else if (isImage('', d.name)) mime = 'image/unknown';
             }
-            
+
             if (isVideo(mime, d.name) && d.poster){ ui.poster = d.poster; showVid(ui,'#','等待数据…'); }
 
             if(h){
               idbGetFull(h, function(rec){
                 if(rec && rec.blob){
-                  var url=URL.createObjectURL(rec.blob);
+                  var url=mkUrl(rec.blob);
                   var recMime = rec.meta && rec.meta.mime || '';
                   var recName = rec.meta && rec.meta.name || d.name || '文件';
-                  // ✅ 修改：用 isImage/isVideo 判断
                   if (isImage(recMime, recName)) showImg(ui,url);
                   else if (isVideo(recMime, recName)) showVid(ui,url,'本地缓存');
                   else fileLink(ui,url, recName, (rec.meta && rec.meta.size)||d.size||0);
-                  setTimeout(function(){ try{URL.revokeObjectURL(url);}catch(e){} },60000);
                   try{ c.send({type:'file-end',id:d.id,hash:h}); }catch(e){}
                   return;
                 }
@@ -557,14 +594,12 @@
 
         if(!ctx.previewed){
           try{
-            var url=URL.createObjectURL(new Blob(ctx.parts,{type:ctx.mime}));
-            // ✅ 修改：用 isImage/isVideo 判断
+            var url=mkUrl(new Blob(ctx.parts,{type:ctx.mime}));
             if (isImage(ctx.mime, ctx.name)){
               showImg(ui,url); ctx.previewed=true; ctx.previewUrl=url;
             }else if (isVideo(ctx.mime, ctx.name)){
               var need=Math.max(1,Math.floor(ctx.size*self.previewPct/100));
               if(ctx.got>=need){ showVid(ui,url,'可预览（接收中 '+pct+'%）'); ctx.previewed=true; ctx.previewUrl=url; }
-              else { try{ URL.revokeObjectURL(url);}catch(e){} }
             }
           }catch(e){}
         }
@@ -588,9 +623,8 @@
       if(!ctx||ctx.id!==id) return;
 
       var blob=new Blob(ctx.parts,{type:ctx.mime});
-      var url=URL.createObjectURL(blob);
+      var url=mkUrl(blob);
 
-      // ✅ 修改：用 isImage/isVideo 判断
       if (isImage(ctx.mime, ctx.name)) showImg(ui,url);
       else if (isVideo(ctx.mime, ctx.name)) showVid(ui,url,'接收完成');
       else fileLink(ui,url,ctx.name,ctx.size);
@@ -605,10 +639,10 @@
         }
       }catch(e){}
 
-      try{ if(ctx.previewUrl) URL.revokeObjectURL(ctx.previewUrl);}catch(e){}
-      (function(u){ setTimeout(function(){ try{URL.revokeObjectURL(u);}catch(e){} },60000); })(url);
       st.recv.cur=null; st.recv.ui=null;
       self.log('已接收文件：'+ctx.name+' '+human(ctx.size));
+      var msgScroll=document.getElementById('msgScroll');
+      if(msgScroll){ msgScroll.scrollTop=msgScroll.scrollHeight; }
     }
 
     function startTimers(){
@@ -691,13 +725,11 @@
       }).catch(function(){ alert('无法获取摄像头/麦克风'); });
     };
 
-    // ✅ 已删除：bindClassicUI(self);
     return self;
   })();
 
   function bindClassicUI(app){
     if (!window.CLASSIC_UI) return;
-    // ✅ 新增：防重复绑定
     if (app.__uiBound) return;
     app.__uiBound = true;
 
@@ -734,6 +766,7 @@
     }
 
     app._classic = {
+      mkUrl: function(blob){ return URL.createObjectURL(blob); },
       appendChat: function(text, mine){
         if (!msgScroll) return;
         var row=document.createElement('div'); row.className='row'+(mine?' right':'');
@@ -752,10 +785,9 @@
         av.appendChild(lt);
         var bubble=document.createElement('div'); bubble.className='bubble file'+(mine?' me':'');
         var safe = String(name||'文件').replace(/"/g,'&quot;');
-        // ✅ 修改：区分发送/接收文案
         bubble.innerHTML = '<div class="file-link"><div class="file-info"><span class="file-icon">📄</span>'
                          + '<span class="file-name" title="'+safe+'">'+safe+'</span></div>'
-                         + '<div class="progress-line">' + (mine ? '准备发送…' : '准备接收…') + '</div></div>';
+                         + '<div class="progress-line">准备接收…</div></div>';
         if (mine){ row.appendChild(bubble); row.appendChild(av); } else { row.appendChild(av); row.appendChild(bubble); }
         msgScroll.appendChild(row); msgScroll.scrollTop=msgScroll.scrollHeight;
         return {root:row, progress:bubble.querySelector('.progress-line'), mediaWrap:bubble};
