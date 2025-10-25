@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -6,9 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>P2P 固定入口（连接配置）</title>
   <style>
-    *{box-sizing:border-box} body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,'Noto Sans','PingFang SC','Microsoft YaHei',sans-serif;background:#f7f7f7;color:#222}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,'Noto Sans','PingFang SC','Microsoft YaHei',sans-serif;background:#f7f7f7;color:#222}
     .wrap{max-width:720px;margin:40px auto;background:#fff;border:1px solid #eee;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.06);padding:20px}
-    h1{margin:0 0 8px} .muted{color:#888;font-size:12px}
+    h1{margin:0 0 8px}
+    .muted{color:#888;font-size:12px}
     .row{display:flex;gap:10px;align-items:center;margin:12px 0}
     .row input[type=text]{flex:1;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:14px}
     .btn{padding:10px 14px;border:0;border-radius:8px;background:#4f6ef7;color:#fff;font-weight:600;cursor:pointer}
@@ -23,7 +24,7 @@
 <body>
   <div class="wrap">
     <h1>🚀 固定入口 · P2P 连接配置</h1>
-    <div class="muted">入口固定为本页，不再使用参数；新 UI 页将完全使用“原版样式”。</div>
+    <div class="muted">入口固定为本页；新 UI 页使用“原版样式”。</div>
 
     <div class="row">
       <input id="networkName" type="text" value="public-network" placeholder="网络名称（固定）" />
@@ -47,7 +48,7 @@
       <div id="qr" style="width:150px;height:150px;margin-top:10px;border:1px solid #eee;border-radius:8px;background:#fff"></div>
       <div class="muted" style="margin-top:6px">
         使用方法：设备 A 连接后复制此链接/扫码分享给 B；设备 B 打开后也点击“连接网络”。<br/>
-        链接只包含本次 peerId（同服已固定），不会出现“各自不同服”的问题。
+        链接只包含本次 peerId（同服固定），不会出现“各自不同服”的问题。
       </div>
     </div>
 
@@ -58,13 +59,18 @@
     <div id="log" class="log">> 初始化中...</div>
 
     <div class="muted" style="margin-top:8px">
-      如遇“控制通道掉线频繁”：优先换网络/热点；不要开 VPN 或在 VPN 客户端放行“本地网络/UDP/P2P”。<br/>
-      文件边下边看：图片即时预览；视频约 10% 即可预览，接收完成后不会丢当前播放进度。
+      如遇“控制通道频繁掉线”：优先换网络/热点；不要开 VPN 或在 VPN 客户端放行“本地网络/UDP/P2P”。<br/>
+      文件：图片即时预览；视频约 10% 即预览，接收完成后不丢当前播放进度。
     </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
+  <script>
+    window.__ENTRY_PAGE__ = true;      /* 入口页标记（用于新页复用实例） */
+    window.__FIXED_SERVER__ = { host:'peerjs.92k.de', port:443, secure:true, path:'/' };
+    window.__FIXED_NETWORK__ = 'public-network';
+  </script>
   <script src="easytier.js"></script>
   <script>
     document.addEventListener('DOMContentLoaded', function(){
