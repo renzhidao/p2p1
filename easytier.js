@@ -37,6 +37,20 @@
   }
   function fileHashMeta(file){ return sha256(file.name+'|'+file.size); }
 
+  // ✅ 新增：文件类型判断工具函数
+  function ext(name){ 
+    var m=String(name||'').match(/\.([a-z0-9]+)$/i); 
+    return m?m[1].toLowerCase():''; 
+  }
+  function isVideo(mime,name){ 
+    if((mime||'').indexOf('video/')===0) return true; 
+    return ['mp4','webm','mkv','mov','m4v','avi','ts','3gp','flv','wmv'].indexOf(ext(name))!==-1;
+  }
+  function isImage(mime,name){ 
+    if((mime||'').indexOf('image/')===0) return true; 
+    return ['jpg','jpeg','png','gif','webp','bmp','heic','heif','avif','svg'].indexOf(ext(name))!==-1;
+  }
+
   var idb, idbReady=false;
   (function openIDB(){
     try{
@@ -83,7 +97,8 @@
     var url=URL.createObjectURL(file);
     var cleaned=false, clean=function(){ if(cleaned) return; cleaned=true; try{URL.revokeObjectURL(url);}catch(e){} };
     video.src=url;
-    video.addEventListener('loadeddata', function(){
+    // ✅ 修改：loadeddata → loadedmetadata 更稳定
+    video.addEventListener('loadedmetadata', function(){
       try{ video.currentTime = Math.min(1, (video.duration||1)*0.1); }catch(e){ clean(); cb(null); }
     }, {once:true});
     video.addEventListener('seeked', function(){
@@ -115,7 +130,6 @@
     self.localId=''; self.virtualIp='';
     self.timers={up:null,ping:null};
 
-    // 精简显示 + 全量复制
     self.logBuf='> 初始化：准备连接';
     self.logFullBuf=self.logBuf;
 
@@ -214,7 +228,6 @@
     function fileLink(ui,url,name,size){ if(self._classic && typeof self._classic.showFileLink==='function') self._classic.showFileLink(ui,url,name,size); }
     function updProg(ui,p){ if(self._classic && typeof self._classic.updateProgress==='function') self._classic.updateProgress(ui,p); }
 
-    // 支持 classic 的 editor；群发/单聊
     self.sendMsg=function(){
       var val='';
       if (self._classic && typeof self._classic.getEditorText==='function') val=self._classic.getEditorText();
@@ -256,8 +269,9 @@
       files.forEach(function(file){
         var ui = placeholder(file.name, file.size, true);
         var localUrl = URL.createObjectURL(file);
-        if ((file.type||'').indexOf('image/')===0) showImg(ui, localUrl);
-        else if ((file.type||'').indexOf('video/')===0){
+        // ✅ 修改：用 isImage/isVideo 判断
+        if (isImage(file.type, file.name)) showImg(ui, localUrl);
+        else if (isVideo(file.type, file.name)){
           extractVideoThumbnail(file, function(p){ if (ui) ui.poster=p; showVid(ui, localUrl, '已发送'); });
         } else { fileLink(ui, localUrl, file.name, file.size); }
         setTimeout(function(){ try{URL.revokeObjectURL(localUrl);}catch(e){} },60000);
@@ -304,7 +318,7 @@
           state={off:0},
           lastTs=0, lastPct=-1;
 
-      var posterP = (file.type||'').indexOf('video/')===0 ? new Promise(function(r){ extractVideoThumbnail(file,r); }) : Promise.resolve(null);
+      var posterP = isVideo(file.type, file.name) ? new Promise(function(r){ extractVideoThumbnail(file,r); }) : Promise.resolve(null);
 
       posterP.then(function(poster){
         try{
@@ -468,15 +482,26 @@
           else if(d.type==='file-begin'){
             var h=d.hash||'';
             var ui=placeholder(d.name||'文件', d.size||0, false);
-            if ((d.mime||'').indexOf('video/')===0 && d.poster){ ui.poster = d.poster; showVid(ui,'#','等待数据…'); }
+            
+            // ✅ 修改：mime 类型兜底修正
+            var mime = d.mime || '';
+            if (!isVideo(mime, d.name) && !isImage(mime, d.name) && (!mime || mime==='application/octet-stream')) {
+              if (isVideo('', d.name)) mime = 'video/unknown';
+              else if (isImage('', d.name)) mime = 'image/unknown';
+            }
+            
+            if (isVideo(mime, d.name) && d.poster){ ui.poster = d.poster; showVid(ui,'#','等待数据…'); }
 
             if(h){
               idbGetFull(h, function(rec){
                 if(rec && rec.blob){
                   var url=URL.createObjectURL(rec.blob);
-                  if ((rec.meta && rec.meta.mime || '').indexOf('image/')===0) showImg(ui,url);
-                  else if ((rec.meta && rec.meta.mime || '').indexOf('video/')===0) showVid(ui,url,'本地缓存');
-                  else fileLink(ui,url, (rec.meta && rec.meta.name)||d.name||'文件', (rec.meta && rec.meta.size)||d.size||0);
+                  var recMime = rec.meta && rec.meta.mime || '';
+                  var recName = rec.meta && rec.meta.name || d.name || '文件';
+                  // ✅ 修改：用 isImage/isVideo 判断
+                  if (isImage(recMime, recName)) showImg(ui,url);
+                  else if (isVideo(recMime, recName)) showVid(ui,url,'本地缓存');
+                  else fileLink(ui,url, recName, (rec.meta && rec.meta.size)||d.size||0);
                   setTimeout(function(){ try{URL.revokeObjectURL(url);}catch(e){} },60000);
                   try{ c.send({type:'file-end',id:d.id,hash:h}); }catch(e){}
                   return;
@@ -490,7 +515,7 @@
             }
 
             self.conns[pid].recv.cur={
-              id:d.id, name:d.name, size:d.size||0, mime:d.mime||'application/octet-stream',
+              id:d.id, name:d.name, size:d.size||0, mime:mime||'application/octet-stream',
               got:0, parts:[], previewed:false, previewUrl:null, videoState:null, hash:h
             };
             self.conns[pid].recv.ui=ui;
@@ -533,9 +558,10 @@
         if(!ctx.previewed){
           try{
             var url=URL.createObjectURL(new Blob(ctx.parts,{type:ctx.mime}));
-            if ((ctx.mime||'').indexOf('image/')===0){
+            // ✅ 修改：用 isImage/isVideo 判断
+            if (isImage(ctx.mime, ctx.name)){
               showImg(ui,url); ctx.previewed=true; ctx.previewUrl=url;
-            }else if ((ctx.mime||'').indexOf('video/')===0){
+            }else if (isVideo(ctx.mime, ctx.name)){
               var need=Math.max(1,Math.floor(ctx.size*self.previewPct/100));
               if(ctx.got>=need){ showVid(ui,url,'可预览（接收中 '+pct+'%）'); ctx.previewed=true; ctx.previewUrl=url; }
               else { try{ URL.revokeObjectURL(url);}catch(e){} }
@@ -564,8 +590,9 @@
       var blob=new Blob(ctx.parts,{type:ctx.mime});
       var url=URL.createObjectURL(blob);
 
-      if ((ctx.mime||'').indexOf('image/')===0) showImg(ui,url);
-      else if ((ctx.mime||'').indexOf('video/')===0) showVid(ui,url,'接收完成');
+      // ✅ 修改：用 isImage/isVideo 判断
+      if (isImage(ctx.mime, ctx.name)) showImg(ui,url);
+      else if (isVideo(ctx.mime, ctx.name)) showVid(ui,url,'接收完成');
       else fileLink(ui,url,ctx.name,ctx.size);
 
       try{
@@ -621,7 +648,6 @@
       self.log('已断开');
     };
 
-    // 入口页一键视频
     self.quickCall=function(){
       if (!self.peer || !self.isConnected){ alert('未连接'); return; }
       var open = Object.keys(self.conns).filter(function(k){ return self.conns[k] && self.conns[k].open; });
@@ -665,12 +691,15 @@
       }).catch(function(){ alert('无法获取摄像头/麦克风'); });
     };
 
-    // ✅ 删除了这一行：bindClassicUI(self);
+    // ✅ 已删除：bindClassicUI(self);
     return self;
   })();
 
   function bindClassicUI(app){
     if (!window.CLASSIC_UI) return;
+    // ✅ 新增：防重复绑定
+    if (app.__uiBound) return;
+    app.__uiBound = true;
 
     var editor = document.getElementById('editor');
     var sendBtn = document.getElementById('sendBtn');
@@ -723,9 +752,10 @@
         av.appendChild(lt);
         var bubble=document.createElement('div'); bubble.className='bubble file'+(mine?' me':'');
         var safe = String(name||'文件').replace(/"/g,'&quot;');
+        // ✅ 修改：区分发送/接收文案
         bubble.innerHTML = '<div class="file-link"><div class="file-info"><span class="file-icon">📄</span>'
                          + '<span class="file-name" title="'+safe+'">'+safe+'</span></div>'
-                         + '<div class="progress-line">准备接收…</div></div>';
+                         + '<div class="progress-line">' + (mine ? '准备发送…' : '准备接收…') + '</div></div>';
         if (mine){ row.appendChild(bubble); row.appendChild(av); } else { row.appendChild(av); row.appendChild(bubble); }
         msgScroll.appendChild(row); msgScroll.scrollTop=msgScroll.scrollHeight;
         return {root:row, progress:bubble.querySelector('.progress-line'), mediaWrap:bubble};
@@ -850,7 +880,6 @@
     app._classic.updateStatus();
   }
 
-  // 关键修复：classic 页面复用 opener.app（含最多 1 秒重试，杜绝时序竞态）
   if (window.CLASSIC_UI && window.opener) {
     (function tryReuse(i){
       if (window.opener.app) {
