@@ -1,75 +1,216 @@
 
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P 聊天风格 UI</title>
-  <style>
-    body{margin:0;background:#0e0f13;color:#e6e6e6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
-    .app{display:grid;grid-template-columns:280px 1fr;grid-template-rows:56px 1fr 140px;gap:10px;height:100dvh;padding:10px}
-    .panel{background:#0b0d12;border:1px solid rgba(255,255,255,.08);border-radius:12px}
-    .sidebar{grid-row:1 / span 3}
-    .top{display:flex;align-items:center;gap:8px;padding:0 12px}
-    .chip{padding:4px 10px;border-radius:999px;font-size:12px;background:#0d1526;border:1px solid #2e3648;color:#a9c6ff;white-space:nowrap}
-    .msgs{padding:10px;overflow:auto}
-    .row{display:flex;gap:8px;margin-bottom:8px}
-    .bubble{max-width:72%;padding:8px 10px;border-radius:12px;background:#0f1726;border:1px solid #2a3142;color:#dce8ff}
-    .me{margin-left:auto;background:#163244;border-color:#23465f}
-    .ctrl{display:flex;gap:10px;align-items:center;padding:10px;background:#0a1120;border-top:1px solid #2d3649;border-radius:0 0 12px 12px}
-    .ctrl input[type=file]{display:none}
-    .btn{padding:8px 14px;border-radius:10px;background:#1a2234;border:1px solid #354059;color:#d8e6ff;cursor:pointer}
-    .btn.primary{background:#2a7cff;border-color:#2a7cff;color:#fff}
-    .stat{display:flex;gap:10px;flex-wrap:wrap}
-    .muted{color:#9aa7b4;font-size:12px}
-    .media{background:transparent;border:none;padding:0}
-    .media img{width:160px;border-radius:8px;display:block}
-    .media video{width:220px;border-radius:8px;display:block;background:#000}
-  </style>
-</head>
-<body>
-  <div class="app">
-    <aside class="panel sidebar"></aside>
-
-    <header class="panel top">
-      <span class="chip" id="status">● 离线</span>
-      <span class="chip" id="statPeers">在线 0</span>
-      <span class="chip" id="statUptime">00:00:00</span>
-      <button class="btn" onclick="window.location='index.html'">返回简洁UI</button>
-      <button class="btn" onclick="app.copyLink()">复制邀请链接</button>
-      <button class="btn" onclick="app.copyLog()">复制日志</button>
-    </header>
-
-    <main class="panel msgs" id="msgs"></main>
-
-    <section class="panel">
-      <div class="ctrl">
-        <button class="btn primary" id="connectBtn" onclick="app.toggle()">连接网络</button>
-        <label class="btn">📎 选择文件<input id="fileInput" type="file" multiple onchange="document.getElementById('fileInput').blur()"></label>
-        <input id="msgInput" style="flex:1;padding:10px;border-radius:8px;border:1px solid #354059;background:#0f1320;color:#d7e1f2" placeholder="输入消息，回车发送" onkeypress="if(event.keyCode===13)app.sendMsg()">
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>局域网聊天</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <style>
+      :root{
+        --sidebar-fr: 0.28; --header-fr: 0.10; --send-fr: 0.18;
+        --bg: #0e0f13; --panel: #0b0d12; --fg: #e6e6e6; --muted: #9aa7b4; --line: rgba(255,255,255,.08);
+        --input-bg: #0a1120; --input-border: #2d3649; --chip: #0d1526; --chip-border: #2e3648; --btn-bg: #1a2234; --btn-border: #354059; --primary: #2a7cff; --thumb: 160px;
+      }
+      *{ box-sizing: border-box; }
+      html, body{ width:100%; height:100%; margin:0; background: var(--bg); color: var(--fg);
+        font-family: ui-sans-serif,-apple-system,system-ui,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",Arial,"Noto Sans","Hiragino Sans GB",sans-serif; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+      }
+      .shell{ width: 100dvw; height: 100dvh; }
+      .app{ width:100%; height:100%; display:grid; grid-template-columns: calc(var(--sidebar-fr) * 100%) calc((1 - var(--sidebar-fr)) * 100%);
+        grid-template-rows: calc(var(--header-fr) * 100%) calc((1 - var(--header-fr) - var(--send-fr)) * 100%) calc(var(--send-fr) * 100%);
+        gap:10px; padding:10px; }
+      .sidebar{ grid-column:1; grid-row:1 / span 3; background:var(--panel); border:1px solid var(--line); border-radius:12px; display:grid; grid-template-rows:auto 1fr; overflow:hidden; min-width:0; min-height:0; }
+      .sidebar .search{ padding:10px; border-bottom:1px solid var(--line); background:#0c1018; }
+      .sidebar .search input{ width:100%; height:40px; font-size:14px; background:#0f1320; color:#d7e1f2; border:1px solid #32394a; border-radius:8px; padding:8px 12px; outline:none; }
+      .sidebar .list{ padding:10px; overflow:auto; }
+      .contact{ display:grid; grid-template-columns:36px 1fr; gap:8px; align-items:center; padding:8px; border:1px solid #232a3a; background:#0e1422; border-radius:10px; margin-bottom:8px; cursor:pointer; }
+      .contact.active{ border-color:#3b82f6; background:#0d1526; }
+      .avatar{ width:36px; height:36px; border-radius:50%; background: linear-gradient(135deg,#5aa1ff,#7ce3ff); }
+      .cname{ font-size:13px; color:#cfe3ff; } .cmsg{ font-size:12px; color:#8ea0b8; }
+      .header{ grid-column:2; grid-row:1; background:var(--panel); border:1px solid var(--line); border-radius:12px; display:flex; align-items:center; gap:8px; padding:0 12px; overflow:hidden; min-width:0; }
+      .chip{ padding:4px 10px; border-radius:999px; font-size:12px; background:var(--chip); border:1px solid var(--chip-border); color:#a9c6ff; white-space:nowrap; }
+      .messages{ grid-column:2; grid-row:2; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:10px; display:grid; grid-template-rows:1fr; min-height:0; min-width:0; }
+      .msg-scroll{ overflow:auto; display:grid; grid-auto-rows:min-content; gap:8px; padding-right:4px; }
+      .row{ display:flex; gap:8px; align-items:flex-end; } .row.right{ justify-content:flex-end; }
+      .bubble{ max-width:72%; padding:8px 10px; border-radius:12px; font-size:14px; line-height:1.35; border:1px solid #2a3142; background:#0f1726; color:#dce8ff; word-break:break-word; min-width:0; }
+      .bubble.me{ background:#163244; border-color:#23465f; }
+      .bubble.file{ background:#0f1c2e; color:#cfe3ff; padding:8px 10px; max-width:280px; }
+      .bubble.media{ background:transparent; border:none; padding:0; }
+      .file-link{ text-decoration:none; color:inherit; display:block; }
+      .file-info{ display:flex; align-items:center; gap:8px; min-width:0; } .file-icon{ font-size:24px; flex-shrink:0; } .file-name{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .thumb-link{ display:inline-block; text-decoration:none; }
+      .thumb.img{ width: var(--thumb); height:auto; display:block; border-radius:8px; }
+      .thumb.video{ position:relative; width:var(--thumb); border-radius:8px; overflow:hidden; background:#0f1726 center/cover no-repeat; }
+      .thumb.video::before{ content:''; display:block; padding-top:56.25%; }
+      .thumb.video .play{ position:absolute; inset:0; display:grid; place-items:center; color:#fff; font-size:28px; text-shadow:0 3px 12px rgba(0,0,0,.6); }
+      .avatar-sm{ width:28px; height:28px; border-radius:50%; display:grid; place-items:center; background: linear-gradient(135deg,#5aa1ff,#7ce3ff); flex:0 0 28px; overflow:hidden; }
+      .avatar-sm .letter{ color:#fff; font-weight:700; font-size:12px; user-select:none; line-height:1; }
+      .send{ grid-column:2; grid-row:3; background:var(--input-bg); border:1px solid var(--input-border); border-radius:12px; display:grid; grid-template-columns:auto 1fr auto; grid-template-rows:1fr auto; min-width:0; min-height:0; }
+      .editor{ grid-column:1 / -1; grid-row:1; background:transparent; color:#e5efff; line-height:1.35; font-size:14px; outline:none; white-space:pre-wrap; word-break:break-word; overflow:auto; padding:10px; }
+      .editor:empty:before{ content: attr(data-ph); color: var(--muted); pointer-events:none; }
+      .s-left{ grid-column:1; grid-row:2; display:flex; gap:10px; align-items:center; padding:10px; }
+      .s-actions{ grid-column:3; grid-row:2; display:flex; gap:10px; align-items:center; padding:10px; }
+      .icon{ display:inline-grid; place-items:center; width:38px; height:38px; border-radius:10px; background:var(--btn-bg); border:1px solid var(--btn-border); color:#d8e6ff; font-size:18px; cursor:pointer; user-select:none; flex:0 0 38px; }
+      .icon input[type=file]{ display:none; }
+      .btn{ padding:8px 14px; border-radius:10px; background:var(--btn-bg); border:1px solid var(--btn-border); color:#d8e6ff; font-size:14px; cursor:pointer; }
+      .btn.primary{ background:var(--primary); border-color:var(--primary); color:#fff; }
+      .btn[disabled]{ opacity:.45; cursor:not-allowed; }
+      .send.drag-over{ outline:2px dashed #2a7cff; outline-offset:-6px; }
+      @media (max-width: 380px){ .bubble{ font-size:13px; } .editor{ font-size:13px; } }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div class="app">
+        <aside class="sidebar" aria-label="联系人">
+          <div class="search"><input id="contactSearch" placeholder="搜索联系人" /></div>
+          <div class="list" id="contactList"></div>
+        </aside>
+        <header class="header" aria-label="顶部栏">
+          <span class="chip" id="statusChip">未连接</span>
+          <span class="chip" id="onlineChip">在线 0</span>
+          <span class="chip">聊天中</span>
+          <span class="chip">免打扰</span>
+          <span class="chip">群设置</span>
+        </header>
+        <main class="messages" aria-label="消息列表">
+          <div id="msgScroll" class="msg-scroll"></div>
+        </main>
+        <section class="send" aria-label="发送区" id="sendArea">
+          <div id="editor" class="editor" contenteditable="true" data-ph="输入消息… 回车发送，Shift+Enter 换行"></div>
+          <div class="s-left">
+            <button id="emojiBtn" class="icon" title="表情">😀</button>
+            <label class="icon" title="附件">📎<input id="fileInput" type="file" multiple /></label>
+          </div>
+          <div class="s-actions"><button id="sendBtn" class="btn primary" disabled>发送</button></div>
+        </section>
       </div>
-      <div class="ctrl stat">
-        <span class="muted">ID: <span id="localId">-</span></span>
-        <span class="muted">IP: <span id="virtualIp">-</span></span>
-        <span class="muted">日志请在“复制日志”后粘贴查看</span>
-      </div>
-    </section>
-  </div>
+    </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
-  <script src="easytier.js"></script>
-  <script>
-    // 自动连接
-    document.addEventListener('DOMContentLoaded', function(){ if (window.app && !app.isConnected) app.toggle(); });
-    // 简单同步几个统计到顶部
-    const updTop = () => {
-      const pc = document.getElementById('peerCount')?.textContent || '0';
-      const up = document.getElementById('uptime')?.textContent || '00:00:00';
-      document.getElementById('statPeers').textContent = '在线 ' + pc;
-      document.getElementById('statUptime').textContent = up;
-    };
-    setInterval(updTop, 1000);
-  </script>
-</body>
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
+    <script src="easytier.js"></script>
+    <script>
+      // 绑定“原版样式”UI到 app
+      (function(){
+        const editor = document.getElementById('editor');
+        const sendBtn = document.getElementById('sendBtn');
+        const fileInput = document.getElementById('fileInput');
+        const msgScroll = document.getElementById('msgScroll');
+        const contactList = document.getElementById('contactList');
+        const contactSearch = document.getElementById('contactSearch');
+        const sendArea = document.getElementById('sendArea');
+        const statusChip = document.getElementById('statusChip');
+        const onlineChip = document.getElementById('onlineChip');
+
+        function textOfEditor(){
+          return (editor.innerText||'').replace(/\u00A0/g,' ').replace(/\r/g,'').trim();
+        }
+        function syncSendBtn(){ sendBtn.disabled = !app.isConnected || textOfEditor().length===0; }
+        editor.addEventListener('input', syncSendBtn);
+        editor.addEventListener('keydown', (e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); app.sendMsg(); }});
+        sendBtn.addEventListener('click', ()=> app.sendMsg());
+        fileInput.addEventListener('change', (e)=>{ const files=[...e.target.files||[]]; if(files.length){ app.sendFilesFrom(files); e.target.value=''; } });
+        contactSearch.addEventListener('input', ()=> renderContacts());
+
+        // 拖拽上传
+        function onDragEnter(e){ e.preventDefault(); sendArea.classList.add('drag-over');}
+        function onDragOver(e){ e.preventDefault();}
+        function onDragLeave(e){ e.preventDefault(); if (e.target===sendArea || !sendArea.contains(e.relatedTarget)) sendArea.classList.remove('drag-over');}
+        function onDrop(e){ e.preventDefault(); sendArea.classList.remove('drag-over'); const files=[...(e.dataTransfer?.files||[])]; if(files.length) app.sendFilesFrom(files);}
+        sendArea.addEventListener('dragenter', onDragEnter);
+        sendArea.addEventListener('dragover', onDragOver);
+        sendArea.addEventListener('dragleave', onDragLeave);
+        sendArea.addEventListener('drop', onDrop);
+
+        // 将 app 的消息/媒体插入原版 UI
+        app._classic = {
+          appendChat: (text, mine)=>{
+            const row = document.createElement('div');
+            row.className = 'row' + (mine?' right':'');
+            const av = document.createElement('div'); av.className='avatar-sm'; const lt=document.createElement('span'); lt.className='letter'; lt.textContent = mine?'我':'他'; av.appendChild(lt);
+            const bubble = document.createElement('div'); bubble.className='bubble'+(mine?' me':''); bubble.textContent = text;
+            if (mine){ row.appendChild(bubble); row.appendChild(av);} else { row.appendChild(av); row.appendChild(bubble); }
+            msgScroll.appendChild(row); msgScroll.scrollTop = msgScroll.scrollHeight;
+          },
+          placeholder: (name,size,mine)=>{
+            const row = document.createElement('div');
+            row.className = 'row' + (mine?' right':'');
+            const av = document.createElement('div'); av.className='avatar-sm'; const lt=document.createElement('span'); lt.className='letter'; lt.textContent = mine?'我':'他'; av.appendChild(lt);
+            const bubble = document.createElement('div'); bubble.className='bubble file'+(mine?' me':'');
+            bubble.innerHTML = `
+              <div class="file-link">
+                <div class="file-info">
+                  <span class="file-icon">📄</span>
+                  <span class="file-name" title="${name.replace(/"/g,'&quot;')}">${name}</span>
+                </div>
+                <div class="progress-line">接收中… 0%</div>
+              </div>`;
+            if (mine){ row.appendChild(bubble); row.appendChild(av);} else { row.appendChild(av); row.appendChild(bubble); }
+            msgScroll.appendChild(row); msgScroll.scrollTop = msgScroll.scrollHeight;
+            return {root:row, progress: bubble.querySelector('.progress-line'), mediaWrap: bubble};
+          },
+          showImage: (ui,url)=>{
+            if (!ui||!ui.mediaWrap) return;
+            ui.mediaWrap.classList.add('media'); ui.mediaWrap.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="thumb-link"><img class="thumb img" src="${url}"></a><div class="progress-line">图片可预览</div>`;
+          },
+          showVideo: (ui,url,info,restore)=>{
+            if (!ui||!ui.mediaWrap) return;
+            ui.mediaWrap.classList.add('media'); ui.mediaWrap.innerHTML = `<a href="${url}" target="_blank" rel="noopener"><video class="media-video" controls preload="metadata" src="${url}"></video></a><div class="progress-line">${info||'可预览'}</div>`;
+            if (restore && typeof restore.time==='number'){
+              const v = ui.mediaWrap.querySelector('video');
+              if (v){ v.addEventListener('loadedmetadata', ()=>{ try{ v.currentTime=Math.min(restore.time,(v.duration||restore.time)); if (!restore.paused) v.play().catch(()=>{});}catch(e){} }, {once:true});}
+            }
+          },
+          showFileLink:(ui,url,name,size)=>{
+            if (!ui||!ui.mediaWrap) return;
+            const safe = (name||'文件').replace(/"/g,'&quot;');
+            ui.mediaWrap.classList.remove('media');
+            ui.mediaWrap.innerHTML = `<a href="${url}" target="_blank" rel="noopener" class="file-link" title="${safe}">
+              <div class="file-info"><span class="file-icon">📄</span><span class="file-name">${safe}</span></div>
+              <div class="progress-line">下载：${safe} (${Math.round(size/1024)} KB)</div></a>`;
+          },
+          updateProgress:(ui,p)=>{ if (ui && ui.progress) ui.progress.textContent='接收中… '+p+'%'; },
+          updateStatus: ()=>{
+            statusChip.textContent = app.isConnected?'已连接':'未连接';
+            const online = parseInt(document.getElementById('peerCount')?.textContent||'0',10)||0;
+            onlineChip.textContent = '在线 ' + online;
+            syncSendBtn();
+          },
+        };
+
+        // 编辑器快捷：表情
+        document.getElementById('emojiBtn').addEventListener('click', ()=>{
+          editor.focus(); document.execCommand('insertText',false,'😀'); syncSendBtn();
+        });
+
+        // 启动时自动连接（和首页一样）
+        document.addEventListener('DOMContentLoaded', ()=>{ if (!app.isConnected) app.toggle(); });
+
+        // 联系人（使用当前连接的 peers 简单渲染）
+        function renderContacts(){
+          const kw=(contactSearch.value||'').trim().toLowerCase();
+          contactList.innerHTML='';
+          // “所有人”占位
+          contactList.appendChild(makeContactRow('all','所有人（群聊）'));
+          const ids = Object.keys(app.conns||{});
+          ids.forEach(pid=>{
+            const nm='节点 '+pid.substring(0,8);
+            if (kw && nm.toLowerCase().indexOf(kw)===-1) return;
+            contactList.appendChild(makeContactRow(pid,nm));
+          });
+        }
+        function makeContactRow(id,name){
+          const row=document.createElement('div'); row.className='contact'; row.dataset.id=id;
+          row.innerHTML = `<div class="avatar"></div><div><div class="cname">${name}</div><div class="cmsg">${id==='all'?'群聊':'单聊'}</div></div>`;
+          row.addEventListener('click', ()=>{
+            document.querySelectorAll('.contact.active').forEach(el=>el.classList.remove('active'));
+            row.classList.add('active');
+          });
+          return row;
+        }
+        setInterval(renderContacts, 1500);
+      })();
+    </script>
+  </body>
 </html>

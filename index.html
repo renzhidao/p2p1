@@ -2,102 +2,64 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P 节点（固定入口 · 更快传输 · 预览 · 详细日志）</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>P2P 固定入口（连接配置）</title>
   <style>
-    *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#fafafa;color:#333;padding:16px}
-    .wrap{max-width:800px;margin:0 auto;background:#fff;border:1px solid #eee;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.06);padding:16px}
-    h1{font-size:20px;margin-bottom:8px}
-    .status{display:inline-block;padding:6px 10px;border-radius:20px;font-size:12px;margin:6px 0}
-    .offline{background:#fee;color:#b30000}
-    .online{background:#eefbe7;color:#1b7a00}
-    .connecting{background:#fff5cc;color:#996800}
-    .row{display:flex;gap:8px;margin:10px 0;align-items:center}
-    .row button{padding:10px 14px;border:0;border-radius:8px;background:#4f6ef7;color:#fff;font-weight:600}
-    .info{background:#f7f7f7;border:1px solid #eee;border-radius:8px;padding:10px;margin-top:6px;font-size:14px}
-    .info div{display:flex;justify-content:space-between;margin:6px 0}
-    .share{display:none;margin-top:10px;border:1px dashed #f0b400;background:#fff9e6;border-radius:8px;padding:10px}
-    #qr{width:150px;height:150px;margin-top:10px;background:#fff;border:1px solid #eee;border-radius:6px;display:flex;align-items:center;justify-content:center}
-    #qr img{max-width:100%;max-height:100%}
-    .tools{display:none;margin-top:10px;border:1px solid #e6e6e6;border-radius:8px;padding:10px}
-    .tool-row{display:flex;gap:8px;align-items:center;margin:6px 0}
-    .tool-row input[type="file"]{flex:1}
-    .chat{display:none;margin-top:10px;border:1px solid #e6e6e6;border-radius:8px;overflow:hidden}
-    .chat-msgs{min-height:200px;max-height:320px;overflow:auto;padding:10px;background:#fafafa}
-    .msg{margin-bottom:8px;padding:6px 8px;border-radius:6px;font-size:14px;max-width:86%}
-    .me{background:#eaf2ff;margin-left:auto}
-    .peer{background:#fff;border:1px solid #eee}
-    .msg small{display:block;font-size:11px;color:#999;margin-bottom:2px}
-    .chat-input{display:flex;border-top:1px solid #eee}
-    .chat-input input{flex:1;border:0;padding:10px}
-    .chat-input button{border:0;background:#4f6ef7;color:#fff;padding:10px 14px}
-    .media-bubble{background:#fff;border:1px solid #eee;border-radius:8px;padding:6px}
-    .media-thumb{width:200px;max-width:80vw;border-radius:6px;display:block}
-    .media-video{width:260px;max-width:90vw;border-radius:6px;display:block;background:#000}
-    .progress-line{font-size:12px;color:#666;margin-top:4px}
-    .logbox{margin-top:10px}
-    .log-actions{display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap}
-    .log-actions button{padding:8px 10px;border:1px solid #ddd;background:#fff;border-radius:8px}
-    pre{background:#111;color:#0f0;border-radius:8px;padding:10px;height:240px;overflow:auto;margin:0;font-family:monospace;font-size:12px;white-space:pre-wrap}
-    .muted{color:#888;font-size:12px}
+    *{box-sizing:border-box} body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,'Noto Sans','PingFang SC','Microsoft YaHei',sans-serif;background:#f7f7f7;color:#222}
+    .wrap{max-width:720px;margin:40px auto;background:#fff;border:1px solid #eee;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.06);padding:20px}
+    h1{margin:0 0 8px} .muted{color:#888;font-size:12px}
+    .row{display:flex;gap:10px;align-items:center;margin:12px 0}
+    .row input[type=text]{flex:1;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:14px}
+    .btn{padding:10px 14px;border:0;border-radius:8px;background:#4f6ef7;color:#fff;font-weight:600;cursor:pointer}
+    .btn[disabled]{opacity:.5;cursor:not-allowed}
+    .stat{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px}
+    .chip{padding:4px 10px;border-radius:999px;font-size:12px;border:1px solid #e5e5e5;background:#fafafa}
+    .box{border:1px solid #eee;border-radius:10px;padding:12px;margin-top:12px;background:#fafafa}
+    .log{background:#0f1115;color:#8bff7a;border-radius:10px;padding:10px;height:220px;overflow:auto;font-family:monospace;font-size:12px;white-space:pre-wrap}
+    .actions{display:flex;gap:8px;margin:8px 0}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>🚀 P2P 节点（固定入口）</h1>
-    <span id="status" class="status offline">● 离线</span>
+    <h1>🚀 固定入口 · P2P 连接配置</h1>
+    <div class="muted">入口固定为本页，不再使用参数；新 UI 页将完全使用“原版样式”。</div>
 
     <div class="row">
-      <button id="connectBtn" onclick="app.toggle()">🔌 连接网络</button>
-      <button onclick="window.open('classic.html','_blank')">打开“聊天风格 UI”（新页）</button>
-      <span class="muted">入口固定为本页，无需任何参数</span>
+      <input id="networkName" type="text" value="public-network" placeholder="网络名称（固定）" />
+      <button id="connectBtn" class="btn" onclick="app.toggle()">🔌 连接网络</button>
+      <button class="btn" onclick="window.open('classic.html','_blank')">打开聊天风格 UI</button>
     </div>
 
-    <div class="info">
-      <div><span>本地 ID</span><b id="localId">-</b></div>
-      <div><span>虚拟 IP</span><b id="virtualIp">-</b></div>
-      <div><span>在线节点</span><b id="peerCount">0</b></div>
-      <div><span>运行时长</span><b id="uptime">00:00:00</b></div>
+    <div class="stat">
+      <span class="chip">本地 ID：<b id="localId">-</b></span>
+      <span class="chip">虚拟 IP：<b id="virtualIp">-</b></span>
+      <span class="chip">在线节点：<b id="peerCount">0</b></span>
+      <span class="chip">运行时长：<b id="uptime">00:00:00</b></span>
+      <span class="chip" id="statusChip">状态：● 离线</span>
     </div>
 
-    <div id="share" class="share">
-      <div style="display:flex;gap:8px;align-items:center">
-        <input id="shareLink" readonly style="flex:1">
-        <button onclick="app.copyLink()">复制邀请链接</button>
+    <div id="share" class="box" style="display:none">
+      <div class="row" style="margin:0">
+        <input id="shareLink" readonly />
+        <button class="btn" onclick="app.copyLink()">复制邀请链接</button>
       </div>
-      <div id="qr"></div>
-      <div class="muted" style="margin-top:6px;">
-        使用方法：A 先点“连接网络”，复制此链接/扫码给 B；B 打开后也点“连接网络”。链接仅包含 peer 参数，已固定同服。
-      </div>
-    </div>
-
-    <div id="tools" class="tools">
-      <div class="tool-row">
-        <input id="fileInput" type="file" multiple>
-        <button onclick="app.sendFiles()">发送文件（更快）</button>
+      <div id="qr" style="width:150px;height:150px;margin-top:10px;border:1px solid #eee;border-radius:8px;background:#fff"></div>
+      <div class="muted" style="margin-top:6px">
+        使用方法：设备 A 连接后复制此链接/扫码分享给 B；设备 B 打开后也点击“连接网络”。<br/>
+        链接只包含本次 peerId（同服已固定），不会出现“各自不同服”的问题。
       </div>
     </div>
 
-    <div id="chat" class="chat">
-      <div id="msgs" class="chat-msgs"></div>
-      <div class="chat-input">
-        <input id="msgInput" placeholder="输入消息回车或点发送" onkeypress="if(event.keyCode===13)app.sendMsg()">
-        <button onclick="app.sendMsg()">发送</button>
-      </div>
+    <div class="actions">
+      <button class="btn" onclick="app.copyLog()">复制日志</button>
+      <button class="btn" onclick="app.clearLog()">清空日志</button>
     </div>
+    <div id="log" class="log">> 初始化中...</div>
 
-    <div class="logbox">
-      <div class="log-actions">
-        <button onclick="app.copyLog()">复制日志</button>
-        <button onclick="app.clearLog()">清空日志</button>
-      </div>
-      <pre id="log">> 初始化中...</pre>
-    </div>
-
-    <div style="margin-top:8px" class="muted">
-      如遇“服务器掉线频繁”：优先换网络/热点；或在 VPN 客户端放行“本地网络/UDP/P2P”。不想折腾就别开 VPN。
+    <div class="muted" style="margin-top:8px">
+      如遇“控制通道掉线频繁”：优先换网络/热点；不要开 VPN 或在 VPN 客户端放行“本地网络/UDP/P2P”。<br/>
+      文件边下边看：图片即时预览；视频约 10% 即可预览，接收完成后不会丢当前播放进度。
     </div>
   </div>
 
@@ -105,11 +67,8 @@
   <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
   <script src="easytier.js"></script>
   <script>
-    // 自动连接（固定网络名/固定服务器）
     document.addEventListener('DOMContentLoaded', function(){
-      if (window.app && !app.isConnected) {
-        app.toggle(); // 自动连
-      }
+      if (window.app && !app.isConnected) app.toggle(); // 自动连接
     });
   </script>
 </body>
