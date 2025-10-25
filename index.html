@@ -1,9 +1,10 @@
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P 节点（安卓兼容 + 聊天/文件/预览 + TURN/relay + 详细日志）</title>
+  <title>P2P 节点（固定入口 · 更快传输 · 预览 · 详细日志）</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#fafafa;color:#333;padding:16px}
@@ -13,8 +14,7 @@
     .offline{background:#fee;color:#b30000}
     .online{background:#eefbe7;color:#1b7a00}
     .connecting{background:#fff5cc;color:#996800}
-    .row{display:flex;gap:8px;margin:10px 0}
-    .row input[type="text"]{flex:1;padding:10px;border:1px solid #ddd;border-radius:8px}
+    .row{display:flex;gap:8px;margin:10px 0;align-items:center}
     .row button{padding:10px 14px;border:0;border-radius:8px;background:#4f6ef7;color:#fff;font-weight:600}
     .info{background:#f7f7f7;border:1px solid #eee;border-radius:8px;padding:10px;margin-top:6px;font-size:14px}
     .info div{display:flex;justify-content:space-between;margin:6px 0}
@@ -38,19 +38,21 @@
     .media-video{width:260px;max-width:90vw;border-radius:6px;display:block;background:#000}
     .progress-line{font-size:12px;color:#666;margin-top:4px}
     .logbox{margin-top:10px}
-    .log-actions{display:flex;gap:8px;margin-bottom:6px}
+    .log-actions{display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap}
     .log-actions button{padding:8px 10px;border:1px solid #ddd;background:#fff;border-radius:8px}
     pre{background:#111;color:#0f0;border-radius:8px;padding:10px;height:240px;overflow:auto;margin:0;font-family:monospace;font-size:12px;white-space:pre-wrap}
+    .muted{color:#888;font-size:12px}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>🚀 P2P 节点（安卓兼容 · TURN/relay · 预览 · 详细日志）</h1>
+    <h1>🚀 P2P 节点（固定入口）</h1>
     <span id="status" class="status offline">● 离线</span>
 
     <div class="row">
-      <input id="networkName" type="text" value="public-network" placeholder="网络名称">
       <button id="connectBtn" onclick="app.toggle()">🔌 连接网络</button>
+      <button onclick="window.open('classic.html','_blank')">打开“聊天风格 UI”（新页）</button>
+      <span class="muted">入口固定为本页，无需任何参数</span>
     </div>
 
     <div class="info">
@@ -62,19 +64,19 @@
 
     <div id="share" class="share">
       <div style="display:flex;gap:8px;align-items:center">
-        <input id="shareLink" readonly>
-        <button onclick="app.copyLink()">复制链接</button>
+        <input id="shareLink" readonly style="flex:1">
+        <button onclick="app.copyLink()">复制邀请链接</button>
       </div>
       <div id="qr"></div>
-      <div style="font-size:12px;color:#8a6d3b;margin-top:6px;">
-        提示：扫码端也要点一次“连接网络”拿到自己的 ID；如走 VPN/公司网，请优先使用 ?forceRelay=1 + TURN
+      <div class="muted" style="margin-top:6px;">
+        使用方法：A 先点“连接网络”，复制此链接/扫码给 B；B 打开后也点“连接网络”。链接仅包含 peer 参数，已固定同服。
       </div>
     </div>
 
     <div id="tools" class="tools">
       <div class="tool-row">
         <input id="fileInput" type="file" multiple>
-        <button onclick="app.sendFiles()">发送文件</button>
+        <button onclick="app.sendFiles()">发送文件（更快）</button>
       </div>
     </div>
 
@@ -93,10 +95,22 @@
       </div>
       <pre id="log">> 初始化中...</pre>
     </div>
+
+    <div style="margin-top:8px" class="muted">
+      如遇“服务器掉线频繁”：优先换网络/热点；或在 VPN 客户端放行“本地网络/UDP/P2P”。不想折腾就别开 VPN。
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
   <script src="easytier.js"></script>
+  <script>
+    // 自动连接（固定网络名/固定服务器）
+    document.addEventListener('DOMContentLoaded', function(){
+      if (window.app && !app.isConnected) {
+        app.toggle(); // 自动连
+      }
+    });
+  </script>
 </body>
 </html>

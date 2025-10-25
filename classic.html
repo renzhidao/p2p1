@@ -1,0 +1,75 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P2P 聊天风格 UI</title>
+  <style>
+    body{margin:0;background:#0e0f13;color:#e6e6e6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+    .app{display:grid;grid-template-columns:280px 1fr;grid-template-rows:56px 1fr 140px;gap:10px;height:100dvh;padding:10px}
+    .panel{background:#0b0d12;border:1px solid rgba(255,255,255,.08);border-radius:12px}
+    .sidebar{grid-row:1 / span 3}
+    .top{display:flex;align-items:center;gap:8px;padding:0 12px}
+    .chip{padding:4px 10px;border-radius:999px;font-size:12px;background:#0d1526;border:1px solid #2e3648;color:#a9c6ff;white-space:nowrap}
+    .msgs{padding:10px;overflow:auto}
+    .row{display:flex;gap:8px;margin-bottom:8px}
+    .bubble{max-width:72%;padding:8px 10px;border-radius:12px;background:#0f1726;border:1px solid #2a3142;color:#dce8ff}
+    .me{margin-left:auto;background:#163244;border-color:#23465f}
+    .ctrl{display:flex;gap:10px;align-items:center;padding:10px;background:#0a1120;border-top:1px solid #2d3649;border-radius:0 0 12px 12px}
+    .ctrl input[type=file]{display:none}
+    .btn{padding:8px 14px;border-radius:10px;background:#1a2234;border:1px solid #354059;color:#d8e6ff;cursor:pointer}
+    .btn.primary{background:#2a7cff;border-color:#2a7cff;color:#fff}
+    .stat{display:flex;gap:10px;flex-wrap:wrap}
+    .muted{color:#9aa7b4;font-size:12px}
+    .media{background:transparent;border:none;padding:0}
+    .media img{width:160px;border-radius:8px;display:block}
+    .media video{width:220px;border-radius:8px;display:block;background:#000}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="panel sidebar"></aside>
+
+    <header class="panel top">
+      <span class="chip" id="status">● 离线</span>
+      <span class="chip" id="statPeers">在线 0</span>
+      <span class="chip" id="statUptime">00:00:00</span>
+      <button class="btn" onclick="window.location='index.html'">返回简洁UI</button>
+      <button class="btn" onclick="app.copyLink()">复制邀请链接</button>
+      <button class="btn" onclick="app.copyLog()">复制日志</button>
+    </header>
+
+    <main class="panel msgs" id="msgs"></main>
+
+    <section class="panel">
+      <div class="ctrl">
+        <button class="btn primary" id="connectBtn" onclick="app.toggle()">连接网络</button>
+        <label class="btn">📎 选择文件<input id="fileInput" type="file" multiple onchange="document.getElementById('fileInput').blur()"></label>
+        <input id="msgInput" style="flex:1;padding:10px;border-radius:8px;border:1px solid #354059;background:#0f1320;color:#d7e1f2" placeholder="输入消息，回车发送" onkeypress="if(event.keyCode===13)app.sendMsg()">
+      </div>
+      <div class="ctrl stat">
+        <span class="muted">ID: <span id="localId">-</span></span>
+        <span class="muted">IP: <span id="virtualIp">-</span></span>
+        <span class="muted">日志请在“复制日志”后粘贴查看</span>
+      </div>
+    </section>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
+  <script src="easytier.js"></script>
+  <script>
+    // 自动连接
+    document.addEventListener('DOMContentLoaded', function(){ if (window.app && !app.isConnected) app.toggle(); });
+    // 简单同步几个统计到顶部
+    const updTop = () => {
+      const pc = document.getElementById('peerCount')?.textContent || '0';
+      const up = document.getElementById('uptime')?.textContent || '00:00:00';
+      document.getElementById('statPeers').textContent = '在线 ' + pc;
+      document.getElementById('statUptime').textContent = up;
+    };
+    setInterval(updTop, 1000);
+  </script>
+</body>
+</html>
