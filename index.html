@@ -64,3 +64,36 @@
       </div>
       <div id="qr"></div>
       <div style="font-size:12px;color:#8a6d3b;margin-top:6px;">
+        提示：扫码端也要点一次“连接网络”拿到自己的 ID 才能互连
+      </div>
+    </div>
+
+    <div id="tools" class="tools">
+      <div class="tool-row">
+        <input id="fileInput" type="file" multiple>
+        <button onclick="app.sendFiles()">发送文件</button>
+      </div>
+    </div>
+
+    <div id="chat" class="chat">
+      <div id="msgs" class="chat-msgs"></div>
+      <div class="chat-input">
+        <input id="msgInput" placeholder="输入消息后回车或点发送" onkeypress="if(event.keyCode===13)app.sendMsg()">
+        <button onclick="app.sendMsg()">发送</button>
+      </div>
+    </div>
+
+    <div class="logbox">
+      <div class="log-actions">
+        <button onclick="app.copyLog()">复制日志</button>
+        <button onclick="app.clearLog()">清空日志</button>
+      </div>
+      <pre id="log">> 初始化中...</pre>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
+  <script src="easytier.js"></script>
+</body>
+</html>
