@@ -8,7 +8,7 @@
     {urls:'stun:global.stun.twilio.com:3478'}
   ];
   var CHUNK = 512*1024;
-  var PREVIEW_PCT = 1;               // 1% 即可预览
+  var PREVIEW_PCT = 1;               // 1% 即可预览（秒出）
   var HIGH_WATER  = 1.5*1024*1024;
   var LOW_WATER   = 0.6*1024*1024;
 
@@ -163,8 +163,9 @@
         if(navigator.clipboard&&navigator.clipboard.writeText){
           navigator.clipboard.writeText(txt).then(function(){ alert('已复制全部日志'); });
         }else{
-          var ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta);
-          ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('已复制全部日志');
+          var ta=document.createElement('textarea'); ta.value=txt;
+          document.body.appendChild(ta); ta.select(); document.execCommand('copy');
+          document.body.removeChild(ta); alert('已复制全部日志');
         }
       }catch(e){ alert('复制失败：'+e.message); }
     };
@@ -491,16 +492,16 @@
             var h=d.hash||'';
             var ui=placeholder(d.name||'文件', d.size||0, false);
 
-            // A 风格：先放封面（若有）
+            // 先放封面（若有）
             if (isVid(d.mime, d.name) && d.poster){ ui.poster = d.poster; showVid(ui,'#','等待数据…'); }
 
-            // 命中全量缓存：直接秒显 + 回 ACK
+            // 命中全量缓存：直接秒显 + ACK
             if(h){
               idbGetFull(h, function(rec){
                 if(rec && rec.blob){
                   var url=mkUrl(rec.blob);
-                  var m = (rec.meta && rec.meta.mime) || '';
-                  var n = (rec.meta && rec.meta.name) || d.name || '文件';
+                  var m=(rec.meta&&rec.meta.mime)||'';
+                  var n=(rec.meta&&rec.meta.name)||d.name||'文件';
                   if (isImg(m,n)) showImg(ui,url);
                   else if (isVid(m,n)) showVid(ui,url,'本地缓存');
                   else fileLink(ui,url,n,(rec.meta&&rec.meta.size)||d.size||0);
@@ -538,7 +539,7 @@
           return;
         }
 
-        // A 风格：接收二进制
+        // 接收二进制流（A 风格 + 1% 阈值）
         var st=self.conns[pid],
             ctx=st&&st.recv&&st.recv.cur,
             ui=st&&st.recv&&st.recv.ui;
@@ -551,7 +552,6 @@
         var pct=ctx.size?Math.min(100,Math.floor(ctx.got*100/ctx.size)):0;
         updProg(ui,pct);
 
-        // 到阈值即预览：图片即显，视频阈值即显
         if(!ctx.previewed){
           try{
             var url=mkUrl(new Blob(ctx.parts,{type:ctx.mime}));
@@ -559,12 +559,21 @@
               showImg(ui,url); ctx.previewed=true; ctx.previewUrl=url;
             } else if (isVid(ctx.mime, ctx.name)){
               var need=Math.max(1,Math.floor(ctx.size*self.previewPct/100));
-              if(ctx.got>=need){ showVid(ui,url,'可预览（接收中 '+pct+'%）'); ctx.previewed=true; ctx.previewUrl=url; }
+              if(ctx.got>=need){
+                showVid(ui,url,'可预览（接收中 '+pct+'%）'); ctx.previewed=true; ctx.previewUrl=url;
+                // 若 UI 使用 <video>（某些皮肤），记录播放进度以便完成后恢复
+                try{
+                  var vw = ui && ui.mediaWrap && ui.mediaWrap.querySelector && ui.mediaWrap.querySelector('video');
+                  if (vw){
+                    ctx.videoState = {time:0, paused:true};
+                    vw.addEventListener('timeupdate', function(){ ctx.videoState.time = vw.currentTime||0; ctx.videoState.paused = vw.paused; });
+                  }
+                }catch(e){}
+              }
             }
           }catch(e){}
         }
 
-        // 断点轻量记录
         if(ctx.hash && ctx.got>0 && (ctx.got % (2*1024*1024) < sz)){
           try{ idbPutPart(ctx.hash,{name:ctx.name,size:ctx.size,mime:ctx.mime, got:ctx.got}); }catch(e){}
         }
@@ -591,8 +600,25 @@
       var url=mkUrl(blob);
 
       if (isImg(ctx.mime, ctx.name)) showImg(ui,url);
-      else if (isVid(ctx.mime, ctx.name)) showVid(ui,url,'接收完成');
-      else fileLink(ui,url,ctx.name,ctx.size);
+      else if (isVid(ctx.mime, ctx.name)){
+        showVid(ui,url,'接收完成');
+        // 恢复播放进度（仅当 UI 皮肤用 <video> 时生效；默认缩略图皮肤不影响）
+        try{
+          if (ctx.videoState){
+            var vw = ui && ui.mediaWrap && ui.mediaWrap.querySelector && ui.mediaWrap.querySelector('video');
+            if (vw){
+              vw.addEventListener('loadedmetadata', function(){
+                try{
+                  if (typeof ctx.videoState.time==='number') vw.currentTime = Math.min(ctx.videoState.time||0, (vw.duration||ctx.videoState.time||0));
+                  if (!ctx.videoState.paused) vw.play().catch(function(){});
+                }catch(e){}
+              }, {once:true});
+            }
+          }
+        }catch(e){}
+      } else {
+        fileLink(ui,url,ctx.name,ctx.size);
+      }
 
       try{
         idbPutFull(hash||ctx.hash||'', blob, {name:ctx.name,size:ctx.size,mime:ctx.mime});
@@ -875,7 +901,7 @@
     app._classic.updateStatus();
   }
 
-  // 复用 opener.app：持续等待，绝不回退到本地空实例
+  // 复用 opener.app：持续等待；无 opener 时，classic 自己建链（A 风格体验）
   if (window.CLASSIC_UI && window.opener) {
     (function waitOpener(){
       try{
@@ -889,6 +915,7 @@
     })();
   } else {
     window.app = app;
-    if (window.CLASSIC_UI) bindClassicUI(app);
+    bindClassicUI(app);
+    if (!app.isConnected) app.toggle();  // classic 直开场景：立即在线（保证发送有目标）
   }
 })();
