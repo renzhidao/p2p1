@@ -1,3 +1,16 @@
+/*
+ * ====================================================================================
+ * Final Merged Version - Fixed by AI Assistant
+ *
+ * 核心修复点:
+ * 1. [关键] 移除了发送视频时对封面提取的阻塞等待。现在文件元信息会立即发送，确保传输总能开始，
+ *    就像稳定的A版本一样。封面提取变为一个不影响主流程的异步操作。
+ * 2. [UI优化] 修复了发送文件时，发送方自己界面上错误地显示“准备接收…”的问题，
+ *    改为更合理的“准备发送…”。
+ *
+ * 本版本融合了B版本的新功能（如断点续传、联系人列表、视频通话）和A版本稳定可靠的文件传输逻辑。
+ * ====================================================================================
+ */
 (function(){
   var injectedServer  = (typeof window.__FIXED_SERVER__  === 'object' && window.__FIXED_SERVER__)  || null;
   var injectedNetwork = (typeof window.__FIXED_NETWORK__ === 'string' && window.__FIXED_NETWORK__) || null;
@@ -37,12 +50,10 @@
   }
   function fileHashMeta(file){ return sha256(file.name+'|'+file.size); }
 
-  // 类型兜底：mime 为空时按扩展名识别
   function ext(name){ var m=String(name||'').match(/\.([a-z0-9]+)$/i); return m?m[1].toLowerCase():''; }
   function isVid(mime,name){ return (mime||'').indexOf('video/')===0 || ['mp4','webm','mkv','mov','m4v','avi','ts','3gp','flv','wmv'].indexOf(ext(name))!==-1; }
   function isImg(mime,name){ return (mime||'').indexOf('image/')===0 || ['jpg','jpeg','png','gif','webp','bmp','heic','heif','avif','svg'].indexOf(ext(name))!==-1; }
 
-  // IndexedDB
   var idb, idbReady=false;
   (function openIDB(){
     try{
@@ -83,7 +94,6 @@
     try{ var tx=idb.transaction('parts','readwrite'); tx.objectStore('parts').delete(hash); }catch(e){}
   }
 
-  // 缩略图
   function extractVideoThumbnail(file, cb){
     var video=document.createElement('video');
     video.preload='metadata'; video.muted=true; video.playsInline=true;
@@ -221,7 +231,6 @@
     function fileLink(ui,url,name,size){ if(self._classic && typeof self._classic.showFileLink==='function') self._classic.showFileLink(ui,url,name,size); }
     function updProg(ui,p){ if(self._classic && typeof self._classic.updateProgress==='function') self._classic.updateProgress(ui,p); }
 
-    // 在当前页面创建 URL（避免跨窗作用域问题）
     function mkUrl(blob){
       if(self._classic && typeof self._classic.mkUrl === 'function') return self._classic.mkUrl(blob);
       return URL.createObjectURL(blob);
@@ -307,55 +316,70 @@
       loop();
     }
 
+    // ========================================================================
+    //   FIXED FUNCTION: sendFileTo
+    //   Removed blocking poster promise. Sends file-begin meta immediately.
+    // ========================================================================
     function sendFileTo(pid,file,hash,done){
       var st=self.conns[pid]; if(!st||!st.open){ self.log('对方不在线：'+shortId(pid)); return done&&done(); }
 
       var c=st.conn,
           id=String(Date.now())+'_'+Math.floor(Math.random()*1e6),
           chunk=self.chunkSize,
-          state={off:0},
-          lastTs=0, lastPct=-1;
+          state={off:0};
 
-      var posterP = isVid(file.type, file.name) ? new Promise(function(r){ extractVideoThumbnail(file,r); }) : Promise.resolve(null);
-
-      posterP.then(function(poster){
-        try{
-          c.send({type:'file-begin', id:id, name:file.name, size:file.size, mime:file.type||'application/octet-stream', chunk:chunk, hash:hash, poster:poster||null});
-        }catch(e){ self.log('文件元信息发送失败'); return done&&done(); }
-
-        st._curSend = st._curSend || {};
-        st._curSend[id] = { setOffset:function(n){ state.off = Math.max(0, Math.min(file.size, n|0)); } };
-
-        var reader=new FileReader();
-        reader.onerror=function(){ self.log('文件读取失败'); try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){} done&&done(); };
-        reader.onload=function(e){
-          flowSend(c,e.target.result,function(err){
-            if(err){ self.log('数据发送失败'); delete st._curSend[id]; return done&&done(); }
-            state.off += e.target.result.byteLength;
-            var pct=Math.min(100,Math.floor(state.off*100/file.size));
-            var nowTs=Date.now();
-            if(pct!==lastPct && (nowTs-lastTs>300 || pct===100)){ lastTs=nowTs; lastPct=pct; }
-            if(state.off<file.size){ setTimeout(readNext,0); }
-            else {
-              try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){}
-              delete st._curSend[id];
-
-              try{
-                idbPutFull(hash||'', file, {name:file.name,size:file.size,mime:file.type||'application/octet-stream'});
-                self.fullSources[hash||'']=self.fullSources[hash||'']||new Set();
-                self.fullSources[hash||''].add(self.localId);
-              }catch(e){}
-
-              done&&done();
+      // 1. Send `file-begin` immediately without poster. This is the crucial fix.
+      try{
+        c.send({
+          type:'file-begin', id:id, name:file.name, size:file.size, 
+          mime:file.type||'application/octet-stream', chunk:chunk, hash:hash
+        });
+      }catch(e){ 
+        self.log('文件元信息发送失败'); return done&&done(); 
+      }
+      
+      // (Optional) Asynchronously send a poster in a separate message if available.
+      // This part is a non-blocking enhancement. The core sending will proceed regardless.
+      if (isVid(file.type, file.name)) {
+        extractVideoThumbnail(file, function(poster) {
+            if (poster && self.conns[pid] && self.conns[pid].open) {
+                try {
+                    c.send({ type: 'file-poster', id: id, poster: poster });
+                } catch (e) { /* Ignore poster send error */ }
             }
-          });
-        };
-        function readNext(){
-          var slice=file.slice(state.off,Math.min(state.off+chunk,file.size));
-          reader.readAsArrayBuffer(slice);
-        }
-        readNext();
-      });
+        });
+      }
+      
+      // 2. Resume logic and file reading proceeds immediately, no longer in a .then() block.
+      st._curSend = st._curSend || {};
+      st._curSend[id] = { setOffset:function(n){ state.off = Math.max(0, Math.min(file.size, n|0)); } };
+
+      var reader=new FileReader();
+      reader.onerror=function(){ self.log('文件读取失败'); try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){} done&&done(); };
+      reader.onload=function(e){
+        flowSend(c,e.target.result,function(err){
+          if(err){ self.log('数据发送失败'); delete st._curSend[id]; return done&&done(); }
+          state.off += e.target.result.byteLength;
+          
+          if(state.off<file.size){ 
+            setTimeout(readNext,0); 
+          } else {
+            try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){}
+            delete st._curSend[id];
+            try{
+              idbPutFull(hash||'', file, {name:file.name,size:file.size,mime:file.type||'application/octet-stream'});
+              self.fullSources[hash||'']=self.fullSources[hash||'']||new Set();
+              self.fullSources[hash||''].add(self.localId);
+            }catch(e){}
+            done&&done();
+          }
+        });
+      };
+      function readNext(){
+        var slice=file.slice(state.off,Math.min(state.off+chunk,file.size));
+        reader.readAsArrayBuffer(slice);
+      }
+      readNext();
     }
 
     self.toggle=function(){
@@ -492,10 +516,8 @@
             var h=d.hash||'';
             var ui=placeholder(d.name||'文件', d.size||0, false);
 
-            // 先放封面（若有）
             if (isVid(d.mime, d.name) && d.poster){ ui.poster = d.poster; showVid(ui,'#','等待数据…'); }
 
-            // 命中全量缓存：直接秒显 + ACK
             if(h){
               idbGetFull(h, function(rec){
                 if(rec && rec.blob){
@@ -516,12 +538,28 @@
               });
             }
 
-            // 建立接收上下文
             self.conns[pid].recv.cur={
               id:d.id, name:d.name, size:d.size||0, mime:d.mime||'application/octet-stream',
-              got:0, parts:[], previewed:false, previewUrl:null, videoState:null, hash:h
+              got:0, parts:[], previewed:false, previewUrl:null, videoState:null, hash:h, poster:d.poster||null
             };
             self.conns[pid].recv.ui=ui;
+          }
+          // ========================================================================
+          //   FIXED: Handle the new `file-poster` message
+          // ========================================================================
+          else if (d.type === 'file-poster') {
+            var st = self.conns[pid];
+            if (st && st.recv && st.recv.cur && st.recv.cur.id === d.id) {
+              var ui = st.recv.ui;
+              var ctx = st.recv.cur;
+              if (ui && d.poster) {
+                ui.poster = d.poster;
+                ctx.poster = d.poster;
+                if (!ctx.previewed && isVid(ctx.mime, ctx.name)) {
+                  showVid(ui, '#', '等待数据…');
+                }
+              }
+            }
           }
           else if(d.type==='file-end'){
             finalizeReceive(pid,d.id,d.hash||'');
@@ -539,7 +577,6 @@
           return;
         }
 
-        // 接收二进制流（A 风格 + 1% 阈值）
         var st=self.conns[pid],
             ctx=st&&st.recv&&st.recv.cur,
             ui=st&&st.recv&&st.recv.ui;
@@ -561,7 +598,6 @@
               var need=Math.max(1,Math.floor(ctx.size*self.previewPct/100));
               if(ctx.got>=need){
                 showVid(ui,url,'可预览（接收中 '+pct+'%）'); ctx.previewed=true; ctx.previewUrl=url;
-                // 若 UI 使用 <video>（某些皮肤），记录播放进度以便完成后恢复
                 try{
                   var vw = ui && ui.mediaWrap && ui.mediaWrap.querySelector && ui.mediaWrap.querySelector('video');
                   if (vw){
@@ -601,8 +637,8 @@
 
       if (isImg(ctx.mime, ctx.name)) showImg(ui,url);
       else if (isVid(ctx.mime, ctx.name)){
+        if (ui && ctx.poster) ui.poster = ctx.poster;
         showVid(ui,url,'接收完成');
-        // 恢复播放进度（仅当 UI 皮肤用 <video> 时生效；默认缩略图皮肤不影响）
         try{
           if (ctx.videoState){
             var vw = ui && ui.mediaWrap && ui.mediaWrap.querySelector && ui.mediaWrap.querySelector('video');
@@ -766,6 +802,10 @@
         if (mine){ row.appendChild(bubble); row.appendChild(av); } else { row.appendChild(av); row.appendChild(bubble); }
         msgScroll.appendChild(row); msgScroll.scrollTop = msgScroll.scrollHeight;
       },
+      // ========================================================================
+      //   FIXED FUNCTION: placeholder
+      //   Displays "准备发送" for sender and "准备接收" for receiver.
+      // ========================================================================
       placeholder: function(name,size,mine){
         if(!msgScroll) return null;
         var row=document.createElement('div'); row.className='row'+(mine?' right':'');
@@ -774,9 +814,10 @@
         av.appendChild(lt);
         var bubble=document.createElement('div'); bubble.className='bubble file'+(mine?' me':'');
         var safe = String(name||'文件').replace(/"/g,'&quot;');
+        var progressText = mine ? '准备发送…' : '准备接收…'; // UI Fix
         bubble.innerHTML = '<div class="file-link"><div class="file-info"><span class="file-icon">📄</span>'
                          + '<span class="file-name" title="'+safe+'">'+safe+'</span></div>'
-                         + '<div class="progress-line">准备接收…</div></div>';
+                         + '<div class="progress-line">'+progressText+'</div></div>';
         if (mine){ row.appendChild(bubble); row.appendChild(av); } else { row.appendChild(av); row.appendChild(bubble); }
         msgScroll.appendChild(row); msgScroll.scrollTop=msgScroll.scrollHeight;
         return {root:row, progress:bubble.querySelector('.progress-line'), mediaWrap:bubble};
@@ -901,7 +942,6 @@
     app._classic.updateStatus();
   }
 
-  // 复用 opener.app：持续等待；无 opener 时，classic 自己建链（A 风格体验）
   if (window.CLASSIC_UI && window.opener) {
     (function waitOpener(){
       try{
@@ -916,6 +956,6 @@
   } else {
     window.app = app;
     bindClassicUI(app);
-    if (!app.isConnected) app.toggle();  // classic 直开场景：立即在线（保证发送有目标）
+    if (!app.isConnected) app.toggle();
   }
 })();
