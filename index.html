@@ -22,7 +22,10 @@
     .log{margin-top:12px;background:#0a0c10;border:1px solid #232634;border-radius:10px;padding:10px;height:220px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:pre-wrap;color:#9fe3a6}
     .vid{margin-top:10px;display:flex;gap:10px;flex-wrap:wrap}
     video{max-width:380px;background:#000;border-radius:8px}
-    .qr{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .qr{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    /* 关键修复：二维码白底+留白，不受深色背景影响 */
+    .qr-wrap{display:inline-block;background:#ffffff;padding:16px;border-radius:10px;border:1px solid #e5e5e5}
+    #qr{width:256px;height:256px}
   </style>
 </head>
 <body>
@@ -52,8 +55,8 @@
           <button class="btn" id="copyShare">复制邀请链接</button>
         </div>
         <div class="qr">
-          <div id="qr" style="width:150px;height:150px;border:1px solid #2a3142;border-radius:8px;background:#fff"></div>
-          <div class="muted">使用方法：设备 A 连接后复制此链接/扫码分享给 B；设备 B 打开后也点击“连接网络”。</div>
+          <div id="qrBox" class="qr-wrap"><div id="qr"></div></div>
+          <div class="muted">用对方设备“浏览器扫码/相机扫码”打开；打开后也点击“连接网络”。</div>
         </div>
       </div>
 
@@ -78,22 +81,20 @@
       <div id="log" class="log">> 就绪：点击“连接网络”开始</div>
 
       <div class="muted" style="margin-top:8px">
-        说明：如果某些网络无法直连，视频通话可能失败（不强求）。文件：图片即显；视频先显示封面，达到一定数据后可播放。
+        说明：若少数网络无法直连，视频通话可能失败（不强求）。文件：图片即显；视频先显示封面，数据足够后可播放。
       </div>
     </div>
   </div>
 
   <script>
-    // 固定信令与网络名（可按需替换）
     window.__FIXED_SERVER__  = { host:'peerjs.92k.de', port:443, secure:true, path:'/' };
     window.__FIXED_NETWORK__ = 'public-network';
-    window.__ENTRY_PAGE__    = true;   // 入口页标记（视频通话 UI 只在本页）
+    window.__ENTRY_PAGE__    = true;
   </script>
   <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
   <script src="easytier.js"></script>
   <script>
-    // 入口页 UI 事件（不改经典 UI）
     const $ = s => document.querySelector(s);
     const logEl = $('#log');
     function log(s){ logEl.textContent += (logEl.textContent ? '\n' : '') + s; logEl.scrollTop = logEl.scrollHeight; }
@@ -121,7 +122,6 @@
       clearLogBtn.addEventListener('click', ()=> window.app && app.clearLog());
       callBtn.addEventListener('click', ()=> window.app && app.toggleCall());
 
-      // 提供入口页状态更新钩子
       window.updateEntryStatus = function(state){
         $('#statusChip').textContent = '状态：' + (state.connected ? '在线' : '离线');
         $('#peerCount').textContent = String(state.online||0);
@@ -133,7 +133,6 @@
         connectBtn.textContent      = state.connected ? '🔌 断开' : '🔌 连接网络';
       };
 
-      // 自动连接（可按需关掉）
       if (window.app && !app.isConnected) app.toggle();
     });
 

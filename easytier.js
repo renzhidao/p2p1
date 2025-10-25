@@ -1,20 +1,17 @@
 (function(){
-  // 固定信令/网络
   var injectedServer  = (typeof window.__FIXED_SERVER__  === 'object' && window.__FIXED_SERVER__)  || null;
   var injectedNetwork = (typeof window.__FIXED_NETWORK__ === 'string' && window.__FIXED_NETWORK__) || null;
 
-  // 配置
   var ICE = [
     {urls:'stun:stun.l.google.com:19302'},
     {urls:'stun:stun1.l.google.com:19302'},
     {urls:'stun:global.stun.twilio.com:3478'}
   ];
-  var CHUNK = 512*1024;     // 分块大小
-  var PREVIEW_PCT = 3;      // 预览阈值 3%
+  var CHUNK = 512*1024;
+  var PREVIEW_PCT = 3;
   var HIGH_WATER  = 1.5*1024*1024;
   var LOW_WATER   = 0.6*1024*1024;
 
-  // 工具
   function now(){ return new Date().toLocaleTimeString(); }
   function shortId(id){ return id? id.substr(0,10)+'...':'-'; }
   function human(n){
@@ -40,17 +37,14 @@
   }
   function fileHashMeta(file){ return sha256(file.name+'|'+file.size); }
 
-  // IDB 缓存（完整 + 部分）
   var idb, idbReady=false;
   (function openIDB(){
     try{
       var req=indexedDB.open('p2p-cache',2);
       req.onupgradeneeded=function(e){
         var db=e.target.result;
-        if(!db.objectStoreNames.contains('files'))
-          db.createObjectStore('files',{keyPath:'hash'});
-        if(!db.objectStoreNames.contains('parts'))
-          db.createObjectStore('parts',{keyPath:'hash'});
+        if(!db.objectStoreNames.contains('files')) db.createObjectStore('files',{keyPath:'hash'});
+        if(!db.objectStoreNames.contains('parts')) db.createObjectStore('parts',{keyPath:'hash'});
       };
       req.onsuccess=function(e){ idb=e.target.result; idbReady=true; };
       req.onerror=function(){ idbReady=false; };
@@ -83,7 +77,6 @@
     try{ var tx=idb.transaction('parts','readwrite'); tx.objectStore('parts').delete(hash); }catch(e){}
   }
 
-  // 视频首帧
   function extractVideoThumbnail(file, cb){
     var video=document.createElement('video');
     video.preload='metadata'; video.muted=true; video.playsInline=true;
@@ -105,11 +98,9 @@
     video.addEventListener('error', function(){ clean(); cb(null); }, {once:true});
   }
 
-  // 应用
   var app=(function(){
     var self={};
 
-    // 基本状态
     self.server  = injectedServer || {host:'peerjs.92k.de', port:443, secure:true, path:'/'};
     self.network = injectedNetwork || 'public-network';
 
@@ -126,10 +117,10 @@
     self.logBuf='> 初始化：准备连接';
 
     self.fullSources={};
-    self.displayNames={};      // peerId -> 显示名
-    self.activePeer='all';     // 当前单聊对象（'all' 为群聊）
+    self.displayNames={};
+    self.activePeer='all';
+    self.myName = (localStorage.getItem('nickname')||'').trim() || '';
 
-    // 入口页日志
     function log(s){
       self.logBuf += "\n["+now()+"] "+s;
       var el=document.getElementById('log');
@@ -148,7 +139,6 @@
       }
     }
     self.log = log;
-
     self.copyLog=function(){
       try{
         if(navigator.clipboard&&navigator.clipboard.writeText){
@@ -180,17 +170,18 @@
     };
 
     self.showShare=function(){
-      var base=window.location.origin+window.location.pathname;
+      var base=window.location.origin+window.location.pathname; // 保持原样
       var url = base + '?peer='+encodeURIComponent(self.localId);
       var input=document.getElementById('shareLink'),
-          box=document.getElementById('share'),
+          qrBox=document.getElementById('qrBox'),
           qr=document.getElementById('qr');
       if(input) input.value=url;
-      if(box) box.style.display='block';
-      if(qr&&window.QRCode){
+      if(qr){
         qr.innerHTML='';
-        new QRCode(qr,{text:url,width:150,height:150});
+        // 关键修复：固定 256px，不缩放；白底在外层 .qr-wrap 提供静区
+        new QRCode(qr,{text:url,width:256,height:256,correctLevel:QRCode.CorrectLevel.M});
       }
+      var share=document.getElementById('share'); if(share) share.style.display='block';
     };
     self.copyLink=function(){
       var el=document.getElementById('shareLink'); if(!el) return;
@@ -212,14 +203,12 @@
     function fileLink(ui,url,name,size){ if(self._classic && typeof self._classic.showFileLink==='function') self._classic.showFileLink(ui,url,name,size); }
     function updProg(ui,p){ if(self._classic && typeof self._classic.updateProgress==='function') self._classic.updateProgress(ui,p); }
 
-    // 文本发送（按 activePeer 路由）
     self.sendMsg=function(){
       var val='';
       if (self._classic && typeof self._classic.getEditorText==='function') val=self._classic.getEditorText();
       val = (val||'').trim();
       if (!val){ return; }
 
-      // 本地回显 + 清空
       pushChat(val, true);
       if (self._classic && typeof self._classic.clearEditor==='function') self._classic.clearEditor();
 
@@ -238,7 +227,6 @@
       self.log('已发送消息：'+ (val.length>30? (val.slice(0,30)+'…') : val));
     };
 
-    // 文件发送（本地回显一次）
     self.sendFiles=function(){
       var fi=document.getElementById('fileInput');
       if(!fi||!fi.files||fi.files.length===0){ alert('请选择文件'); return; }
@@ -254,7 +242,6 @@
       if(!targets.length){ self.log('无在线对象，无法发送文件'); alert('没有在线节点，无法发送文件'); return; }
 
       files.forEach(function(file){
-        // 本地回显一次
         var ui = placeholder(file.name, file.size, true);
         var localUrl = URL.createObjectURL(file);
         if ((file.type||'').indexOf('image/')===0) showImg(ui, localUrl);
@@ -263,7 +250,6 @@
         } else { fileLink(ui, localUrl, file.name, file.size); }
         setTimeout(function(){ try{URL.revokeObjectURL(localUrl);}catch(e){} },60000);
 
-        // 真正发送
         fileHashMeta(file).then(function(hash){
           targets.forEach(function(pid){ enqueueFile(pid,file,hash); });
         });
@@ -303,10 +289,9 @@
       var c=st.conn,
           id=String(Date.now())+'_'+Math.floor(Math.random()*1e6),
           chunk=self.chunkSize,
-          state={off:0}, // 可被 resume 修改
+          state={off:0},
           lastTs=0, lastPct=-1;
 
-      // 先发送 meta（附带 poster）
       var posterP = (file.type||'').indexOf('video/')===0 ? new Promise(function(r){ extractVideoThumbnail(file,r); }) : Promise.resolve(null);
 
       posterP.then(function(poster){
@@ -314,11 +299,9 @@
           c.send({type:'file-begin', id:id, name:file.name, size:file.size, mime:file.type||'application/octet-stream', chunk:chunk, hash:hash, poster:poster||null});
         }catch(e){ self.log('文件元信息发送失败'); return done&&done(); }
 
-        // 监听对方的续传请求
         st._curSend = st._curSend || {};
         st._curSend[id] = { setOffset:function(n){ state.off = Math.max(0, Math.min(file.size, n|0)); } };
 
-        // 读并发
         var reader=new FileReader();
         reader.onerror=function(){ self.log('文件读取失败'); try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){} done&&done(); };
         reader.onload=function(e){
@@ -340,7 +323,6 @@
       });
     }
 
-    // 连接流程
     self.toggle=function(){
       if(self.isConnected){ self.disconnect(); return; }
       var nameEl=document.getElementById('networkName');
@@ -378,7 +360,7 @@
       self.peer.on('error', function(err){ self.log('连接错误：'+(err && (err.message||err.type)||err)); });
       self.peer.on('disconnected', function(){ self.log('信令掉线，尝试重连'); try{ self.peer.reconnect(); }catch(e){} });
       self.peer.on('close', function(){ self.log('连接已关闭'); });
-      // 媒体通话被呼叫（仅入口页可用）
+
       self.peer.on('call', function(call){
         if (!window.__ENTRY_PAGE__){ try{ call.close(); }catch(e){} return; }
         navigator.mediaDevices.getUserMedia({video:true,audio:true}).then(function(stream){
@@ -441,7 +423,6 @@
 
       c.on('data', function(d){
         if(d && typeof d==='object' && d.type){
-          // 控制消息
           if(d.type==='hello'){
             self.displayNames[pid] = d.name || ('节点 '+shortId(pid));
             if (d.fullList && Array.isArray(d.fullList)){
@@ -450,7 +431,6 @@
                 self.fullSources[h].add(pid);
               });
             }
-            // 刷新联系人
             if(self._classic && self._classic.renderContacts){
               var arr=[]; for(var k in self.conns){ if(self.conns[k].open) arr.push({id:k,name:self.displayNames[k]||('节点 '+shortId(k))}); }
               self._classic.renderContacts(arr, self.activePeer);
@@ -470,7 +450,6 @@
             self.log('收到消息');
           }
           else if(d.type==='file-begin'){
-            // 命中完整缓存 -> 秒回
             var h=d.hash||'';
             var ui=placeholder(d.name||'文件', d.size||0, false);
             if ((d.mime||'').indexOf('video/')===0 && d.poster){ ui.poster = d.poster; showVid(ui,'#','等待数据…'); }
@@ -486,7 +465,6 @@
                   try{ c.send({type:'file-end',id:d.id,hash:h}); }catch(e){}
                   return;
                 }
-                // 命中部分 -> 续传请求
                 idbGetPart(h, function(rec2){
                   if(rec2 && rec2.meta && typeof rec2.meta.got==='number' && rec2.meta.got<(d.size||0)){
                     try{ c.send({type:'file-resume', id:d.id, hash:h, offset:rec2.meta.got}); }catch(e){}
@@ -512,7 +490,6 @@
             }
           }
           else if(d.type==='file-resume'){
-            // 发送方收到续传请求
             var st=self.conns[pid];
             if (st && st._curSend && st._curSend[d.id] && typeof d.offset==='number'){
               try{ st._curSend[d.id].setOffset(d.offset|0); }catch(e){}
@@ -521,7 +498,6 @@
           return;
         }
 
-        // 二进制（文件数据）
         var st=self.conns[pid],
             ctx=st&&st.recv&&st.recv.cur,
             ui=st&&st.recv&&st.recv.ui;
@@ -534,12 +510,10 @@
         var pct=ctx.size?Math.min(100,Math.floor(ctx.got*100/ctx.size)):0;
         updProg(ui,pct);
 
-        // 分段持久（每2MB）
         if(ctx.hash && ctx.got>0 && (ctx.got % (2*1024*1024) < sz)){
           try{ idbPutPart(ctx.hash,{name:ctx.name,size:ctx.size,mime:ctx.mime, got:ctx.got}); }catch(e){}
         }
 
-        // 预览
         if(!ctx.previewed){
           try{
             var url=URL.createObjectURL(new Blob(ctx.parts,{type:ctx.mime}));
@@ -627,7 +601,6 @@
       self.log('已断开');
     };
 
-    // 入口页：视频通话（仅 1v1，对当前单聊）
     self.toggleCall=function(forceClose){
       if (!window.__ENTRY_PAGE__) return;
       self._media = self._media || {};
@@ -653,13 +626,10 @@
       }).catch(function(){ alert('无法获取摄像头/麦克风'); });
     };
 
-    // 经典 UI 绑定（不改 UI 文件）
     bindClassicUI(self);
-
     return self;
   })();
 
-  // 经典 UI 适配（仅在 classic.html 生效）
   function bindClassicUI(app){
     if (!window.__CLASSIC_UI__) return;
 
@@ -685,7 +655,6 @@
       sendBtn.disabled = !(app && app.isConnected && hasText);
     }
 
-    // 运行时修复群聊乱码
     function fixAllLabel(){
       try{
         var rows = contactList.querySelectorAll('.contact');
@@ -728,7 +697,6 @@
         ui.mediaWrap.innerHTML = '<a href="'+url+'" target="_blank" rel="noopener" class="thumb-link">'
                                + '<img class="thumb img" src="'+url+'"></a>';
       },
-      // 视频缩略图 + 新窗口打开（不内嵌 video，避免撑破气泡）
       showVideo: function(ui,url,info){
         if(!ui||!ui.mediaWrap) return;
         ui.mediaWrap.classList.add('media');
@@ -757,12 +725,10 @@
       getEditorText: textOfEditor,
       clearEditor: clearEditor,
 
-      // 联系人列表（显示昵称；点击切换 activePeer）
       renderContacts: function(list, activeId){
         if (!contactList) return;
         var kw = (contactSearch && contactSearch.value || '').trim().toLowerCase();
         contactList.innerHTML='';
-        // 群聊
         var all=document.createElement('div'); all.className='contact'+((activeId==='all')?' active':''); all.dataset.id='all';
         all.innerHTML='<div class="avatar"></div><div><div class="cname">所有人（群聊）</div><div class="cmsg">群聊</div></div>';
         all.addEventListener('click', function(){
@@ -772,7 +738,6 @@
         });
         contactList.appendChild(all);
 
-        // 在线 peer
         for (var pid in app.conns){
           if (!app.conns.hasOwnProperty(pid)) continue;
           if (!app.conns[pid].open) continue;
@@ -832,12 +797,9 @@
       app._classic.renderContacts(arr, app.activePeer);
     }); }
 
-    // 初始状态
     app._classic.updateStatus();
   }
 
-  // 导出实例
-  // 经典 UI 页复用入口页实例
   if (window.__CLASSIC_UI__ && window.__USE_OPENER_APP__ && window.opener && window.opener.app){
     window.app = window.opener.app;
     bindClassicUI(window.app);
