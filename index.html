@@ -1,34 +1,43 @@
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P 节点</title>
+  <title>P2P 节点（安卓兼容 + 聊天/传文件/可复制日志）</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#fafafa;color:#333;padding:16px}
-    .wrap{max-width:720px;margin:0 auto;background:#fff;border:1px solid #eee;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.06);padding:20px}
+    .wrap{max-width:760px;margin:0 auto;background:#fff;border:1px solid #eee;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.06);padding:16px}
     h1{font-size:20px;margin-bottom:8px}
-    .status{display:inline-block;padding:6px 10px;border-radius:20px;font-size:12px;margin:8px 0}
+    .status{display:inline-block;padding:6px 10px;border-radius:20px;font-size:12px;margin:6px 0}
     .offline{background:#fee;color:#b30000}
     .online{background:#eefbe7;color:#1b7a00}
     .connecting{background:#fff5cc;color:#996800}
     .row{display:flex;gap:8px;margin:10px 0}
-    .row input{flex:1;padding:10px;border:1px solid #ddd;border-radius:8px}
+    .row input[type="text"]{flex:1;padding:10px;border:1px solid #ddd;border-radius:8px}
     .row button{padding:10px 14px;border:0;border-radius:8px;background:#4f6ef7;color:#fff;font-weight:600}
-    .info{background:#f7f7f7;border:1px solid #eee;border-radius:8px;padding:10px;margin-top:8px;font-size:14px}
+    .info{background:#f7f7f7;border:1px solid #eee;border-radius:8px;padding:10px;margin-top:6px;font-size:14px}
     .info div{display:flex;justify-content:space-between;margin:6px 0}
-    .share{display:none;margin-top:12px;border:1px dashed #f0b400;background:#fff9e6;border-radius:8px;padding:10px}
+    .share{display:none;margin-top:10px;border:1px dashed #f0b400;background:#fff9e6;border-radius:8px;padding:10px}
     #qr{width:150px;height:150px;margin-top:10px;background:#fff;border:1px solid #eee;border-radius:6px;display:flex;align-items:center;justify-content:center}
-    .chat{display:none;margin-top:12px;border:1px solid #e6e6e6;border-radius:8px;overflow:hidden}
-    .chat-msgs{height:180px;overflow:auto;padding:10px;background:#fafafa}
-    .chat-msg{margin-bottom:8px;padding:6px 8px;border-radius:6px;font-size:14px;max-width:80%}
+    #qr img{max-width:100%;max-height:100%}
+    .tools{display:none;margin-top:10px;border:1px solid #e6e6e6;border-radius:8px;padding:10px}
+    .tool-row{display:flex;gap:8px;align-items:center;margin:6px 0}
+    .tool-row input[type="file"]{flex:1}
+    .chat{display:none;margin-top:10px;border:1px solid #e6e6e6;border-radius:8px;overflow:hidden}
+    .chat-msgs{height:220px;overflow:auto;padding:10px;background:#fafafa}
+    .msg{margin-bottom:8px;padding:6px 8px;border-radius:6px;font-size:14px;max-width:86%}
     .me{background:#eaf2ff;margin-left:auto}
     .peer{background:#fff;border:1px solid #eee}
+    .msg small{display:block;font-size:11px;color:#999;margin-bottom:2px}
     .chat-input{display:flex;border-top:1px solid #eee}
     .chat-input input{flex:1;border:0;padding:10px}
     .chat-input button{border:0;background:#4f6ef7;color:#fff;padding:10px 14px}
-    pre{background:#111;color:#0f0;border-radius:8px;padding:10px;height:160px;overflow:auto;margin-top:12px;font-family:monospace;font-size:12px;white-space:pre-wrap}
+    .logbox{margin-top:10px}
+    .log-actions{display:flex;gap:8px;margin-bottom:6px}
+    .log-actions button{padding:8px 10px;border:1px solid #ddd;background:#fff;border-radius:8px}
+    pre{background:#111;color:#0f0;border-radius:8px;padding:10px;height:170px;overflow:auto;margin:0;font-family:monospace;font-size:12px;white-space:pre-wrap}
   </style>
 </head>
 <body>
@@ -37,7 +46,7 @@
     <span id="status" class="status offline">● 离线</span>
 
     <div class="row">
-      <input id="networkName" value="public-network" placeholder="网络名称">
+      <input id="networkName" type="text" value="public-network" placeholder="网络名称">
       <button id="connectBtn" onclick="app.toggle()">🔌 连接网络</button>
     </div>
 
@@ -51,20 +60,36 @@
     <div id="share" class="share">
       <div style="display:flex;gap:8px;align-items:center">
         <input id="shareLink" readonly>
-        <button onclick="app.copy()">复制链接</button>
+        <button onclick="app.copyLink()">复制链接</button>
       </div>
       <div id="qr"></div>
+      <div style="font-size:12px;color:#8a6d3b;margin-top:6px;">
+        扫码后，另一台设备也需要点一次“连接网络”，即可互连
+      </div>
+    </div>
+
+    <div id="tools" class="tools">
+      <div class="tool-row">
+        <input id="fileInput" type="file" multiple>
+        <button onclick="app.sendFiles()">发送文件</button>
+      </div>
     </div>
 
     <div id="chat" class="chat">
       <div id="msgs" class="chat-msgs"></div>
       <div class="chat-input">
-        <input id="msgInput" placeholder="输入消息后回车或点发送" onkeypress="if(event.keyCode===13)app.send()">
-        <button onclick="app.send()">发送</button>
+        <input id="msgInput" placeholder="输入消息后回车或点发送" onkeypress="if(event.keyCode===13)app.sendMsg()">
+        <button onclick="app.sendMsg()">发送</button>
       </div>
     </div>
 
-    <pre id="log">> 初始化中...</pre>
+    <div class="logbox">
+      <div class="log-actions">
+        <button onclick="app.copyLog()">复制日志</button>
+        <button onclick="app.clearLog()">清空日志</button>
+      </div>
+      <pre id="log">> 初始化中...</pre>
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
