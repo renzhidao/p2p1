@@ -670,7 +670,7 @@
   })();
 
   function bindClassicUI(app){
-    if (!window.__CLASSIC_UI__) return;
+    if (!window.CLASSIC_UI) return;  // ✅ 修改1：去掉双下划线
 
     var editor = document.getElementById('editor');
     var sendBtn = document.getElementById('sendBtn');
@@ -851,7 +851,7 @@
   }
 
   // 关键修复：classic 页面复用 opener.app（含最多 1 秒重试，杜绝时序竞态）
-  if (window.__CLASSIC_UI__ && window.opener) {
+  if (window.CLASSIC_UI && window.opener) {  // ✅ 修改2：去掉双下划线
     (function tryReuse(i){
       if (window.opener.app) {
         window.app = window.opener.app;
@@ -865,7 +865,6 @@
     })(0);
   } else {
     window.app = app;
-    if (window.__CLASSIC_UI__) bindClassicUI(app);
+    if (window.CLASSIC_UI) bindClassicUI(app);  // ✅ 修改3：去掉双下划线
   }
 })();
-
