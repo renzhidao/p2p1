@@ -1,60 +1,56 @@
 (function(){
-  // 配置
-  var server = (typeof window.__FIXED_SERVER__ === 'object' && window.__FIXED_SERVER__) || {host:'peerjs.92k.de', port:443, secure:true, path:'/'};
-  var networkName = (typeof window.__FIXED_NETWORK__ === 'string' && window.__FIXED_NETWORK__) || 'public-network';
+  // 固定信令/网络
+  var injectedServer  = (typeof window.__FIXED_SERVER__  === 'object' && window.__FIXED_SERVER__)  || null;
+  var injectedNetwork = (typeof window.__FIXED_NETWORK__ === 'string' && window.__FIXED_NETWORK__) || null;
 
+  // 配置
   var ICE = [
     {urls:'stun:stun.l.google.com:19302'},
     {urls:'stun:stun1.l.google.com:19302'},
     {urls:'stun:global.stun.twilio.com:3478'}
   ];
-
-  var CHUNK = 512*1024;        // 512KB
-  var PREVIEW_PCT = 3;         // 3%
-  var HIGH_WATER = 1.5*1024*1024;
-  var LOW_WATER  = 0.6*1024*1024;
+  var CHUNK = 512*1024;     // 分块大小
+  var PREVIEW_PCT = 3;      // 预览阈值 3%
+  var HIGH_WATER  = 1.5*1024*1024;
+  var LOW_WATER   = 0.6*1024*1024;
 
   // 工具
-  var log = function(s){ try{ (window._entryLog||console.log)('[ET] '+s); }catch(e){} };
-  var nowStr = function(){ return new Date().toLocaleTimeString(); };
-
-  function sanitizeId(s){
-    return String(s||'').toLowerCase().replace(/[^a-z0-9_-]/g,'-').slice(0,48) || 'room';
-  }
-  function roomIdOf(name){ return 'et-' + sanitizeId(name||'public-network'); }
-  function short(id){ if(!id) return '-'; return id.slice(0,8)+'…'; }
+  function now(){ return new Date().toLocaleTimeString(); }
+  function shortId(id){ return id? id.substr(0,10)+'...':'-'; }
   function human(n){
     if(n<1024) return n+' B';
     if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
     if(n<1024*1024*1024) return (n/1024/1024).toFixed(1)+' MB';
     return (n/1024/1024/1024).toFixed(1)+' GB';
   }
-  function firstCharSafe(str, fallback){
-    try{
-      var s=String(str||'').trim();
-      if(!s) return fallback||'?';
-      var it = s[Symbol.iterator](); var f = it.next(); return f.value || fallback || '?';
-    }catch(e){ return fallback||'?'; }
+  function genIp(id){
+    var h=0; for(var i=0;i<id.length;i++){ h=(h*31+id.charCodeAt(i))>>>0; }
+    return '10.144.'+(((h)&0xff)+1)+'.'+(((h>>8)&0xff)+1);
+  }
+  function getPeerParam(){
+    var s=window.location.search; if(!s||s.length<2) return '';
+    var m=s.match(/[?&]peer=([^&]+)/); return m? decodeURIComponent(m[1]):'';
   }
   function sha256(str){
     var enc=new TextEncoder().encode(str);
     return crypto.subtle.digest('SHA-256', enc).then(function(buf){
-      var b=new Uint8Array(buf), s='';
-      for(var i=0;i<b.length;i++){ s+=('0'+b[i].toString(16)).slice(-2);}
+      var b=new Uint8Array(buf), s=''; for(var i=0;i<b.length;i++){ s+=('0'+b[i].toString(16)).slice(-2); }
       return s;
     });
   }
   function fileHashMeta(file){ return sha256(file.name+'|'+file.size); }
 
-  // IDB（断点续传/缓存）
+  // IDB 缓存（完整 + 部分）
   var idb, idbReady=false;
   (function openIDB(){
     try{
       var req=indexedDB.open('p2p-cache',2);
       req.onupgradeneeded=function(e){
         var db=e.target.result;
-        if(!db.objectStoreNames.contains('files')) db.createObjectStore('files',{keyPath:'hash'});
-        if(!db.objectStoreNames.contains('parts')) db.createObjectStore('parts',{keyPath:'hash'}); // 部分
+        if(!db.objectStoreNames.contains('files'))
+          db.createObjectStore('files',{keyPath:'hash'});
+        if(!db.objectStoreNames.contains('parts'))
+          db.createObjectStore('parts',{keyPath:'hash'});
       };
       req.onsuccess=function(e){ idb=e.target.result; idbReady=true; };
       req.onerror=function(){ idbReady=false; };
@@ -71,9 +67,9 @@
       rq.onsuccess=function(){ cb(rq.result||null); }; rq.onerror=function(){ cb(null); };
     }catch(e){ cb(null); }
   }
-  function idbPutPart(hash, partsMeta){
+  function idbPutPart(hash, meta){
     if(!idbReady) return;
-    try{ var tx=idb.transaction('parts','readwrite'); tx.objectStore('parts').put({hash:hash, meta:partsMeta, ts:Date.now()}); }catch(e){}
+    try{ var tx=idb.transaction('parts','readwrite'); tx.objectStore('parts').put({hash:hash, meta:meta, ts:Date.now()}); }catch(e){}
   }
   function idbGetPart(hash, cb){
     if(!idbReady) return cb(null);
@@ -88,794 +84,765 @@
   }
 
   // 视频首帧
-  function extractVideoThumbnailFromBlob(blob, cb){
-    try{
-      var v=document.createElement('video'); v.preload='metadata'; v.muted=true; v.playsInline=true;
-      var url=URL.createObjectURL(blob); v.src=url;
-      var done=false, clean=function(){ if(done) return; done=true; try{URL.revokeObjectURL(url);}catch(e){} };
-      v.addEventListener('loadeddata', function(){
-        try{ v.currentTime = Math.min(1, (v.duration||1)*0.1); }catch(e){ clean(); cb(null); }
-      }, {once:true});
-      v.addEventListener('seeked', function(){
-        try{
-          var w=v.videoWidth||320, h=v.videoHeight||180, r=w/h, W=320, H=Math.round(W/r);
-          var c=document.createElement('canvas'); c.width=W; c.height=H;
-          var g=c.getContext('2d'); g.drawImage(v,0,0,W,H);
-          var poster=c.toDataURL('image/jpeg',0.7);
-          clean(); cb(poster);
-        }catch(e){ clean(); cb(null); }
-      }, {once:true});
-      v.addEventListener('error', function(){ clean(); cb(null); }, {once:true});
-    }catch(e){ cb(null); }
+  function extractVideoThumbnail(file, cb){
+    var video=document.createElement('video');
+    video.preload='metadata'; video.muted=true; video.playsInline=true;
+    var url=URL.createObjectURL(file);
+    var cleaned=false, clean=function(){ if(cleaned) return; cleaned=true; try{URL.revokeObjectURL(url);}catch(e){} };
+    video.src=url;
+    video.addEventListener('loadeddata', function(){
+      try{ video.currentTime = Math.min(1, (video.duration||1)*0.1); }catch(e){ clean(); cb(null); }
+    }, {once:true});
+    video.addEventListener('seeked', function(){
+      try{
+        var w=video.videoWidth||320, h=video.videoHeight||180, r=w/h, W=320, H=Math.round(W/r);
+        var c=document.createElement('canvas'); c.width=W; c.height=H;
+        var g=c.getContext('2d'); g.drawImage(video,0,0,W,H);
+        var poster=c.toDataURL('image/jpeg',0.7);
+        clean(); cb(poster);
+      }catch(e){ clean(); cb(null); }
+    }, {once:true});
+    video.addEventListener('error', function(){ clean(); cb(null); }, {once:true});
   }
 
-  // 应用对象
+  // 应用
   var app=(function(){
     var self={};
 
-    // 公开状态
-    self.connected=false;
-    self.isHub=false;
-    self.peer=null;
-    self.anchorId = roomIdOf(networkName);
-    self.localId='';
-    self.myName = (localStorage.getItem('nickname')||'').trim() || '';
-    self.users = new Map(); // id -> {id,name}
-    self.activePeer='all';
+    // 基本状态
+    self.server  = injectedServer || {host:'peerjs.92k.de', port:443, secure:true, path:'/'};
+    self.network = injectedNetwork || 'public-network';
 
-    // 房主转发表：fid -> {fromId, toIds:Set}
-    var routes = Object.create(null);
+    self.chunkSize  = CHUNK;
+    self.previewPct = PREVIEW_PCT;
+    self.highWater  = HIGH_WATER;
+    self.lowWater   = LOW_WATER;
 
-    // 连接字典：id -> {conn, open, sending, queue:[]}
-    self.conns = {};
+    self.iceServers = ICE;
 
-    // 视频通话（入口页用）
-    self._media = { local:null, remote:null, call:null };
-    var haveEntry = !!window.__ENTRY_PAGE__;
+    self.peer=null; self.conns={}; self.isConnected=false; self.startAt=0;
+    self.localId=''; self.virtualIp='';
+    self.timers={up:null,ping:null};
+    self.logBuf='> 初始化：准备连接';
 
-    // classic UI 绑定（UI 页面不改）
-    bindClassicUI(self);
+    self.fullSources={};
+    self.displayNames={};      // peerId -> 显示名
+    self.activePeer='all';     // 当前单聊对象（'all' 为群聊）
 
-    function updateEntryChips(){
-      if (typeof window.updateEntryChips === 'function'){
-        window.updateEntryChips({connected:self.connected, online:self.users.size, isHub:self.isHub});
-      }
-    }
-    function setStatus(connected){
-      self.connected = !!connected;
-      updateEntryChips();
-      if (self._classic && typeof self._classic.updateStatus==='function') self._classic.updateStatus();
-    }
-
-    // hub 广播 users
-    function broadcastUsers(){
-      var list=[]; self.users.forEach(function(v){ list.push({id:v.id,name:v.name}); });
-      // 给自己 UI
-      if (self._classic && typeof self._classic.renderContacts==='function'){
-        self._classic.renderContacts(list, self.activePeer);
-      }
-      // 广播给客户端
-      if (self.isHub){
-        Object.keys(self.conns).forEach(function(pid){
-          var st=self.conns[pid]; if(!st.open) return;
-          try{ st.conn.send({type:'users', users:list}); }catch(e){}
+    // 入口页日志
+    function log(s){
+      self.logBuf += "\n["+now()+"] "+s;
+      var el=document.getElementById('log');
+      if(el){ el.textContent=self.logBuf; el.scrollTop=el.scrollHeight; }
+      if (typeof window.updateEntryStatus === 'function'){
+        var up='00:00:00';
+        if(self.isConnected && self.startAt){
+          var sec=Math.floor((Date.now()-self.startAt)/1000), h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s2=sec%60;
+          up=(h<10?'0':'')+h+':'+(m<10?'0':'')+m+':'+(s2<10?'0':'')+s2;
+        }
+        window.updateEntryStatus({
+          connected:self.isConnected,
+          online:Object.keys(self.conns).filter(k=>self.conns[k].open).length,
+          localId:self.localId, virtualIp:self.virtualIp, uptime:up
         });
       }
-      updateEntryChips();
+    }
+    self.log = log;
+
+    self.copyLog=function(){
+      try{
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(self.logBuf).then(function(){ alert('日志已复制'); });
+        }else{
+          var ta=document.createElement('textarea'); ta.value=self.logBuf; document.body.appendChild(ta);
+          ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('日志已复制');
+        }
+      }catch(e){ alert('复制失败：'+e.message); }
+    };
+    self.clearLog=function(){ self.logBuf=''; var el=document.getElementById('log'); if(el) el.textContent=''; };
+
+    function setStatus(txt){
+      var st=document.getElementById('statusChip');
+      if(st) st.textContent = '状态：' + txt;
     }
 
-    // 添加/删除用户
-    function setUser(id,name){ self.users.set(id,{id:id,name:name||('节点 '+short(id))}); broadcastUsers(); }
-    function delUser(id){ self.users.delete(id); if (self.activePeer===id) self.activePeer='all'; broadcastUsers(); }
-
-    // 发送文本（按 activePeer 或 all）
-    self.sendMsg=function(){
-      var text='';
-      if (self._classic && typeof self._classic.getEditorText==='function') text=self._classic.getEditorText();
-      text = (text||'').trim();
-      if (!text) return;
-
-      // 本地回显
-      if (self._classic && typeof self._classic.appendChat==='function'){
-        self._classic.appendChat(text, true);
-        if (self._classic.clearEditor) self._classic.clearEditor();
-      }
-
-      var to = self.activePeer || 'all';
-      if (self.isHub){
-        // hub 直接转发
-        routeText(self.localId, to, text);
-      }else{
-        // 客户端发给 hub
-        var hub = self.conns[self.anchorId] && self.conns[self.anchorId].conn;
-        if (!hub || !self.connected){ return; }
-        try{ hub.send({type:'msg', from:self.localId, to:to, text:text}); }catch(e){}
-      }
+    self.updateInfo=function(){
+      var openCount=0; for(var k in self.conns){ if(self.conns[k].open) openCount++; }
+      var lid=document.getElementById('localId'),
+          vip=document.getElementById('virtualIp'),
+          pc=document.getElementById('peerCount');
+      if(lid) lid.textContent = self.localId ? shortId(self.localId) : '-';
+      if(vip) vip.textContent = self.virtualIp || '-';
+      if(pc)  pc.textContent  = String(openCount);
+      var onlineChip=document.getElementById('onlineChip');
+      if(onlineChip) onlineChip.textContent='在线 '+openCount;
+      if(self._classic && typeof self._classic.updateStatus==='function') self._classic.updateStatus();
     };
 
-    function routeText(from, to, text){
-      if (!self.isHub) return;
-      if (to==='all'){
-        Object.keys(self.conns).forEach(function(pid){
-          // 给所有人，包括发送者，让他也“回显一致”
-          try{ self.conns[pid].conn.send({type:'msg', from:from, to:'all', text:text}); }catch(e){}
-        });
-      }else{
-        // 单发，双方都收到
-        var a=self.conns[to], b=self.conns[from];
-        if (a) try{ a.conn.send({type:'msg', from:from, to:to, text:text}); }catch(e){}
-        if (b) try{ b.conn.send({type:'msg', from:from, to:to, text:text}); }catch(e){}
+    self.showShare=function(){
+      var base=window.location.origin+window.location.pathname;
+      var url = base + '?peer='+encodeURIComponent(self.localId);
+      var input=document.getElementById('shareLink'),
+          box=document.getElementById('share'),
+          qr=document.getElementById('qr');
+      if(input) input.value=url;
+      if(box) box.style.display='block';
+      if(qr&&window.QRCode){
+        qr.innerHTML='';
+        new QRCode(qr,{text:url,width:150,height:150});
       }
+    };
+    self.copyLink=function(){
+      var el=document.getElementById('shareLink'); if(!el) return;
+      try{
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(el.value).then(function(){ alert('已复制'); });
+        } else { el.select(); document.execCommand('copy'); alert('已复制'); }
+      }catch(e){ alert('复制失败：'+e.message); }
+    };
+
+    function pushChat(text,mine){
+      if(self._classic && typeof self._classic.appendChat==='function') self._classic.appendChat(text,mine);
     }
+    function placeholder(name,size,mine){
+      return self._classic && typeof self._classic.placeholder==='function' ? self._classic.placeholder(name,size,mine) : null;
+    }
+    function showImg(ui,url){ if(self._classic && typeof self._classic.showImage==='function') self._classic.showImage(ui,url); }
+    function showVid(ui,url,note){ if(self._classic && typeof self._classic.showVideo==='function') self._classic.showVideo(ui,url,note,null); }
+    function fileLink(ui,url,name,size){ if(self._classic && typeof self._classic.showFileLink==='function') self._classic.showFileLink(ui,url,name,size); }
+    function updProg(ui,p){ if(self._classic && typeof self._classic.updateProgress==='function') self._classic.updateProgress(ui,p); }
 
-    // 发文件（从 UI 的文件列表来）
+    // 文本发送（按 activePeer 路由）
+    self.sendMsg=function(){
+      var val='';
+      if (self._classic && typeof self._classic.getEditorText==='function') val=self._classic.getEditorText();
+      val = (val||'').trim();
+      if (!val){ return; }
+
+      // 本地回显 + 清空
+      pushChat(val, true);
+      if (self._classic && typeof self._classic.clearEditor==='function') self._classic.clearEditor();
+
+      var targets=[];
+      if (self.activePeer==='all'){
+        for (var k in self.conns){ if(self.conns.hasOwnProperty(k) && self.conns[k].open) targets.push(k); }
+      }else{
+        if (self.conns[self.activePeer] && self.conns[self.activePeer].open) targets=[self.activePeer];
+      }
+      if (!targets.length){ self.log('无在线对象，消息未发送'); return; }
+
+      targets.forEach(function(pid){
+        try{ self.conns[pid].conn.send({type:'chat', text:val}); }
+        catch(e){ self.log('消息发送失败：'+(e.message||e)); }
+      });
+      self.log('已发送消息：'+ (val.length>30? (val.slice(0,30)+'…') : val));
+    };
+
+    // 文件发送（本地回显一次）
+    self.sendFiles=function(){
+      var fi=document.getElementById('fileInput');
+      if(!fi||!fi.files||fi.files.length===0){ alert('请选择文件'); return; }
+      self.sendFilesFrom([].slice.call(fi.files)); fi.value='';
+    };
     self.sendFilesFrom=function(files){
-      files = Array.prototype.slice.call(files||[]);
-      if (!files.length) return;
+      var targets=[];
+      if (self.activePeer==='all'){
+        for(var k in self.conns){ if(self.conns[k].open) targets.push(k); }
+      } else {
+        if (self.conns[self.activePeer] && self.conns[self.activePeer].open) targets=[self.activePeer];
+      }
+      if(!targets.length){ self.log('无在线对象，无法发送文件'); alert('没有在线节点，无法发送文件'); return; }
 
-      var to = self.activePeer || 'all';
-      // 本地一次回显（不等对端）
       files.forEach(function(file){
-        // 先回显自己一条
-        var ui = self._classic && self._classic.placeholder ? self._classic.placeholder(file.name, file.size, true) : null;
+        // 本地回显一次
+        var ui = placeholder(file.name, file.size, true);
         var localUrl = URL.createObjectURL(file);
-        if (file.type.indexOf('image/')===0){
-          self._classic && self._classic.showImage && self._classic.showImage(ui, localUrl);
-        }else if (file.type.indexOf('video/')===0){
-          extractVideoThumbnailFromBlob(file, function(p){
-            if (ui) ui.poster = p||null;
-            self._classic && self._classic.showVideo && self._classic.showVideo(ui, localUrl, '已发送', null);
-          });
-        }else{
-          self._classic && self._classic.showFileLink && self._classic.showFileLink(ui, localUrl, file.name, file.size);
-        }
-        setTimeout(function(){ try{URL.revokeObjectURL(localUrl);}catch(e){} }, 60000);
+        if ((file.type||'').indexOf('image/')===0) showImg(ui, localUrl);
+        else if ((file.type||'').indexOf('video/')===0){
+          extractVideoThumbnail(file, function(p){ if (ui) ui.poster=p; showVid(ui, localUrl, '已发送'); });
+        } else { fileLink(ui, localUrl, file.name, file.size); }
+        setTimeout(function(){ try{URL.revokeObjectURL(localUrl);}catch(e){} },60000);
 
         // 真正发送
         fileHashMeta(file).then(function(hash){
-          doSendFile(to, file, hash);
+          targets.forEach(function(pid){ enqueueFile(pid,file,hash); });
         });
       });
     };
 
-    function doSendFile(to, file, hash){
-      var fid = String(Date.now())+'_'+Math.floor(Math.random()*1e6);
-      var posterP = (file.type||'').indexOf('video/')===0 ?
-        new Promise(function(res){ extractVideoThumbnailFromBlob(file, res); }) :
-        Promise.resolve(null);
+    function enqueueFile(pid,file,hash){
+      var st=self.conns[pid]; if(!st||!st.open){ self.log('对方不在线：'+shortId(pid)); return; }
+      if(!st.queue) st.queue=[];
+      st.queue.push({file:file,hash:hash});
+      if(!st.sending){ st.sending=true; sendNext(pid); }
+    }
+    function sendNext(pid){
+      var st=self.conns[pid]; if(!st) return;
+      var job=st.queue.shift(); if(!job){ st.sending=false; return; }
+      sendFileTo(pid, job.file, job.hash, function(){ sendNext(pid); });
+    }
+    function getBuffered(c){
+      try{
+        if(c&&c._dc&&typeof c._dc.bufferedAmount==='number') return c._dc.bufferedAmount;
+        if(c&&typeof c.bufferSize==='number') return c.bufferSize;
+      }catch(e){}
+      return 0;
+    }
+    function flowSend(c,data,cb){
+      var loop=function(){
+        if(getBuffered(c)>HIGH_WATER){ setTimeout(loop,20); return; }
+        try{ c.send(data);}catch(e){ cb(e); return; }
+        cb(null);
+      };
+      loop();
+    }
+
+    function sendFileTo(pid,file,hash,done){
+      var st=self.conns[pid]; if(!st||!st.open){ self.log('对方不在线：'+shortId(pid)); return done&&done(); }
+
+      var c=st.conn,
+          id=String(Date.now())+'_'+Math.floor(Math.random()*1e6),
+          chunk=self.chunkSize,
+          state={off:0}, // 可被 resume 修改
+          lastTs=0, lastPct=-1;
+
+      // 先发送 meta（附带 poster）
+      var posterP = (file.type||'').indexOf('video/')===0 ? new Promise(function(r){ extractVideoThumbnail(file,r); }) : Promise.resolve(null);
 
       posterP.then(function(poster){
-        if (self.isHub){
-          // hub 本机也可能发送：复用客户端通道逻辑（发给自己转发）
-          sendFileViaHub(self.localId, to, fid, file, hash, poster);
-        }else{
-          var hub = self.conns[self.anchorId] && self.conns[self.anchorId].conn;
-          if (!hub || !self.connected) return;
-
-          try{
-            hub.send({type:'file-begin', fid:fid, from:self.localId, to:to, name:file.name, size:file.size, mime:file.type||'application/octet-stream', chunk:CHUNK, hash:hash, poster:poster||null});
-          }catch(e){ return; }
-
-          // 读并发数据
-          var off=0; var reader=new FileReader();
-          reader.onerror=function(){ try{ hub.send({type:'file-end', fid:fid, from:self.localId, to:to, hash:hash}); }catch(e){} };
-          reader.onload=function(e){
-            // 节流
-            var buf=e.target.result;
-            // 分块传（直接发 ArrayBuffer）
-            try{ hub.send(buf); }catch(ex){}
-            off+=buf.byteLength;
-            if (off < file.size){
-              readNext();
-            } else {
-              try{ hub.send({type:'file-end', fid:fid, from:self.localId, to:to, hash:hash}); }catch(e){}
-            }
-          };
-          function readNext(){
-            var slice=file.slice(off, Math.min(off+CHUNK, file.size));
-            reader.readAsArrayBuffer(slice);
-          }
-          readNext();
-        }
-      });
-    }
-
-    // hub 路由：文件
-    function sendFileViaHub(fromId, to, fid, file, hash, poster){
-      if (!self.isHub) return;
-      // 建立路由
-      var targets=[];
-      if (to==='all'){
-        targets = Object.keys(self.conns).filter(function(pid){ return pid!==fromId; });
-      }else{
-        if (self.conns[to]) targets=[to];
-      }
-      routes[fid] = {fromId:fromId, toIds:new Set(targets)};
-
-      // 发 meta 给目标
-      targets.forEach(function(pid){
-        var st=self.conns[pid]; if(!st||!st.open) return;
-        try{ st.conn.send({type:'file-begin', fid:fid, from:fromId, to:pid, name:file.name, size:file.size, mime:file.type||'application/octet-stream', chunk:CHUNK, hash:hash, poster:poster||null}); }catch(e){}
-      });
-
-      // hub 自己从文件读 chunk，转发
-      var off=0; var reader=new FileReader();
-      reader.onerror=function(){
-        targets.forEach(function(pid){ var st=self.conns[pid]; if(st&&st.open) try{ st.conn.send({type:'file-end', fid:fid, from:fromId, to:pid, hash:hash}); }catch(e){} });
-        delete routes[fid];
-      };
-      reader.onload=function(e){
-        var buf=e.target.result;
-        targets.forEach(function(pid){
-          var st=self.conns[pid]; if(!st||!st.open) return;
-          try{ st.conn.send(buf); }catch(ex){}
-        });
-        off+=buf.byteLength;
-        if (off < file.size){
-          readNext();
-        } else {
-          targets.forEach(function(pid){ var st=self.conns[pid]; if(st&&st.open) try{ st.conn.send({type:'file-end', fid:fid, from:fromId, to:pid, hash:hash}); }catch(e){} });
-          delete routes[fid];
-        }
-      };
-      function readNext(){
-        var slice=file.slice(off, Math.min(off+CHUNK, file.size));
-        reader.readAsArrayBuffer(slice);
-      }
-      readNext();
-    }
-
-    // 客户端接收：文件处理
-    function handleIncomingFileBegin(meta){
-      // 本端创建占位
-      var ui = self._classic && self._classic.placeholder ? self._classic.placeholder(meta.name, meta.size, false) : null;
-      if (ui && meta.poster) ui.poster = meta.poster;
-
-      // 断点：查 IDB
-      var hash = meta.hash||'';
-      if (hash){
-        idbGetFull(hash, function(rec){
-          if (rec && rec.blob && rec.meta && rec.meta.size===meta.size){
-            // 秒回：已完整
-            var url=URL.createObjectURL(rec.blob);
-            if ((rec.meta.mime||'').indexOf('image/')===0){
-              self._classic && self._classic.showImage && self._classic.showImage(ui, url);
-            }else if ((rec.meta.mime||'').indexOf('video/')===0){
-              self._classic && self._classic.showVideo && self._classic.showVideo(ui, url, '本地缓存', null);
-            }else{
-              self._classic && self._classic.showFileLink && self._classic.showFileLink(ui, url, rec.meta.name, rec.meta.size);
-            }
-            setTimeout(function(){ try{URL.revokeObjectURL(url);}catch(e){} },60000);
-            // 告知对端完成
-            tryRoute({type:'file-end', fid:meta.fid, from:meta.from, to:meta.to, hash:hash});
-            return;
-          }
-          // 查部分
-          idbGetPart(hash, function(part){
-            if (part && part.meta && typeof part.meta.got==='number' && part.meta.got<meta.size){
-              tryRoute({type:'file-resume', fid:meta.fid, from:meta.to, to:meta.from, hash:hash, offset:part.meta.got});
-            }
-          });
-        });
-      }
-
-      // 新建接收上下文
-      self._recv = self._recv || {};
-      self._recv[meta.fid] = {
-        fid:meta.fid, name:meta.name, size:meta.size, mime:meta.mime, from:meta.from, to:meta.to,
-        got:0, parts:[], previewed:false, previewUrl:null, poster:meta.poster||null, hash:meta.hash||'',
-        ui:ui, lastFlush:0
-      };
-
-      // 如果带海报，先显示缩略图
-      if ((meta.mime||'').indexOf('video/')===0 && meta.poster && self._classic && self._classic.showVideo){
-        // 先占位缩略图，不可点
-        self._classic.showVideo(ui, '#', '等待数据…', null);
-      }
-    }
-
-    function handleIncomingFileChunk(buf){
-      self._recv = self._recv || {};
-      // 只有一个在收？
-      var keys = Object.keys(self._recv); if (!keys.length) return;
-      var fid = keys[0]; var ctx = self._recv[fid]; if(!ctx) return;
-
-      ctx.parts.push(new Blob([buf], {type:ctx.mime}));
-      ctx.got += buf.byteLength;
-      var pct = ctx.size ? Math.min(100, Math.floor(ctx.got*100/ctx.size)) : 0;
-      self._classic && self._classic.updateProgress && self._classic.updateProgress(ctx.ui, pct);
-
-      // 分段落盘（每 2MB）
-      if (ctx.hash && ctx.got - ctx.lastFlush >= 2*1024*1024){
-        try{ idbPutPart(ctx.hash, {name:ctx.name,size:ctx.size,mime:ctx.mime, got:ctx.got}); ctx.lastFlush = ctx.got; }catch(e){}
-      }
-
-      // 预览
-      if (!ctx.previewed){
         try{
-          var url = URL.createObjectURL(new Blob(ctx.parts, {type:ctx.mime}));
-          if ((ctx.mime||'').indexOf('image/')===0){
-            self._classic && self._classic.showImage && self._classic.showImage(ctx.ui, url);
-            ctx.previewed=true; ctx.previewUrl=url;
-          }else if ((ctx.mime||'').indexOf('video/')===0){
-            var need = Math.max(1, Math.floor(ctx.size*PREVIEW_PCT/100));
-            if (ctx.got >= need){
-              self._classic && self._classic.showVideo && self._classic.showVideo(ctx.ui, url, '可预览（接收中 '+pct+'%）', null);
-              ctx.previewed=true; ctx.previewUrl=url;
-            }else{
-              try{ URL.revokeObjectURL(url);}catch(e){}
-            }
-          }
-        }catch(e){}
-      }
-    }
+          c.send({type:'file-begin', id:id, name:file.name, size:file.size, mime:file.type||'application/octet-stream', chunk:chunk, hash:hash, poster:poster||null});
+        }catch(e){ self.log('文件元信息发送失败'); return done&&done(); }
 
-    function finalizeIncomingFile(meta){
-      var ctx = self._recv && self._recv[meta.fid];
-      if (!ctx) return;
+        // 监听对方的续传请求
+        st._curSend = st._curSend || {};
+        st._curSend[id] = { setOffset:function(n){ state.off = Math.max(0, Math.min(file.size, n|0)); } };
 
-      var blob = new Blob(ctx.parts, {type:ctx.mime});
-      var url  = URL.createObjectURL(blob);
-
-      if ((ctx.mime||'').indexOf('image/')===0){
-        self._classic && self._classic.showImage && self._classic.showImage(ctx.ui, url);
-      }else if ((ctx.mime||'').indexOf('video/')===0){
-        self._classic && self._classic.showVideo && self._classic.showVideo(ctx.ui, url, '接收完成', null);
-      }else{
-        self._classic && self._classic.showFileLink && self._classic.showFileLink(ctx.ui, url, ctx.name, ctx.size);
-      }
-
-      // 完整落盘，删除部分
-      try{
-        idbPutFull(ctx.hash||'', blob, {name:ctx.name,size:ctx.size,mime:ctx.mime});
-        if (ctx.hash) idbDelPart(ctx.hash);
-      }catch(e){}
-
-      // 清理
-      try{ if(ctx.previewUrl) URL.revokeObjectURL(ctx.previewUrl);}catch(e){}
-      setTimeout(function(){ try{URL.revokeObjectURL(url);}catch(e){} },60000);
-      delete self._recv[meta.fid];
-    }
-
-    // 路由发送（客户端 -> hub，或 hub -> hub 自用）
-    function tryRoute(obj){
-      if (self.isHub){
-        // hub 自己处理
-        if (obj.type==='file-end'){
-          // hub 不需要本地 UI
-        }else if (obj.type==='file-resume'){
-          // 转发给发送方
-          var st=self.conns[obj.to]; if(st&&st.open) try{ st.conn.send(obj); }catch(e){}
+        // 读并发
+        var reader=new FileReader();
+        reader.onerror=function(){ self.log('文件读取失败'); try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){} done&&done(); };
+        reader.onload=function(e){
+          flowSend(c,e.target.result,function(err){
+            if(err){ self.log('数据发送失败'); delete st._curSend[id]; return done&&done(); }
+            state.off += e.target.result.byteLength;
+            var pct=Math.min(100,Math.floor(state.off*100/file.size));
+            var nowTs=Date.now();
+            if(pct!==lastPct && (nowTs-lastTs>300 || pct===100)){ lastTs=nowTs; lastPct=pct; }
+            if(state.off<file.size){ setTimeout(readNext,0); }
+            else { try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){} delete st._curSend[id]; done&&done(); }
+          });
+        };
+        function readNext(){
+          var slice=file.slice(state.off,Math.min(state.off+chunk,file.size));
+          reader.readAsArrayBuffer(slice);
         }
-      }else{
-        var hub = self.conns[self.anchorId] && self.conns[self.anchorId].conn;
-        if (!hub || !self.connected) return;
-        try{ hub.send(obj); }catch(e){}
-      }
+        readNext();
+      });
     }
 
-    // 入口页视频通话（1v1，仅对 activePeer）
-    self.toggleCall = function(){
-      if (!haveEntry) return;
-      if (self._media.call){
-        try{ self._media.call.close(); }catch(e){}
-        self._media.call=null;
-        if (self._media.local){ try{ self._media.local.getTracks().forEach(t=>t.stop()); }catch(e){} self._media.local=null; }
-        var rv=document.getElementById('remoteVideo'); if(rv) rv.srcObject=null;
-        var lv=document.getElementById('localVideo');  if(lv) lv.srcObject=null;
-        return;
-      }
-      // 仅对单聊对象有效
-      var pid = self.activePeer;
-      if (!pid || pid==='all'){ alert('请先在 UI 里选择一个联系人'); return; }
-      var peer = self.peer; if (!peer){ alert('未连接'); return; }
-
-      navigator.mediaDevices.getUserMedia({video:true, audio:true}).then(function(stream){
-        self._media.local = stream;
-        var lv=document.getElementById('localVideo'); if(lv) lv.srcObject=stream;
-        var call = peer.call(pid, stream);
-        self._media.call = call;
-        call.on('stream', function(remote){ var rv=document.getElementById('remoteVideo'); if(rv) rv.srcObject=remote; });
-        call.on('close', function(){ self.toggleCall(); });
-        call.on('error', function(){ self.toggleCall(); });
-      }).catch(function(){ alert('无法获取摄像头/麦克风'); });
-    };
-
-    // 连接/断开
+    // 连接流程
     self.toggle=function(){
-      if (self.connected){ disconnect(); return; }
-      connectStart();
+      if(self.isConnected){ self.disconnect(); return; }
+      var nameEl=document.getElementById('networkName');
+      if(nameEl && nameEl.value.trim()) self.network=nameEl.value.trim();
+      var nick = (localStorage.getItem('nickname')||'').trim();
+      self.myName = nick || ('用户-'+Math.random().toString(36).slice(2,6));
+      connect();
     };
 
-    function connectStart(){
-      var rid = self.anchorId;
-      var p;
+    function connect(){
+      setStatus('连接中…'); self.log('开始连接…');
       try{
-        // 先尝试作为房主（占用固定房间 ID）
-        p=new Peer(rid,{host:server.host,port:server.port,secure:server.secure,path:server.path,config:{iceServers:ICE}});
-      }catch(e){ log('Peer init error: '+e.message); return; }
+        var p=new Peer(null,{host:self.server.host,port:self.server.port,secure:self.server.secure,path:self.server.path,config:{iceServers:self.iceServers}});
+        self.peer=p;
+      }catch(e){ self.log('初始化失败：'+e.message); setStatus('离线'); return; }
 
-      self.peer=p;
-      var opened=false, anchorOk=false;
+      var opened=false;
+      var t=setTimeout(function(){ if(!opened){ self.log('连接超时'); try{ self.peer.destroy(); }catch(e){} setStatus('离线'); } }, 10000);
 
-      p.on('open', function(id){
-        opened=true; anchorOk=true; self.isHub=true; self.localId=id;
-        setStatus(true);
-        setUser(self.localId, self.myName || ('房主-'+short(self.localId)));
-        broadcastUsers();
-        log('['+nowStr()+'] 作为房主上线：'+id);
-        // 房主监听入站
-        p.on('connection', function(conn){ handleConn(conn,true); });
-        // 房主接听媒体通话
-        p.on('call', function(call){
-          if (!haveEntry){ try{ call.close(); }catch(e){} return; }
-          navigator.mediaDevices.getUserMedia({video:true,audio:true}).then(function(stream){
-            self._media.local = stream;
-            var lv=document.getElementById('localVideo'); if(lv) lv.srcObject=stream;
-            call.answer(stream);
-            self._media.call = call;
-            call.on('stream', function(remote){ var rv=document.getElementById('remoteVideo'); if(rv) rv.srcObject=remote; });
-            call.on('close', function(){ self.toggleCall(); });
-            call.on('error', function(){ self.toggleCall(); });
-          }).catch(function(){ try{ call.close(); }catch(e){} });
-        });
+      self.peer.on('open', function(id){
+        opened=true; clearTimeout(t);
+        self.localId=id; self.virtualIp=genIp(id); self.isConnected=true; self.startAt=Date.now();
+        setStatus('在线');
+        self.updateInfo();
+        self.showShare();
+        self.log('已连接，ID='+id);
+
+        var toDial=getPeerParam();
+        if(toDial){ self.log('准备连接对端：'+toDial); setTimeout(function(){ connectPeer(toDial); },400); }
+
+        startTimers();
       });
 
-      // 如果占用失败（ID 已被房主占用），转客户端
-      p.on('error', function(err){
-        if (anchorOk) { log('peer error: '+(err&&err.type||err)); return; }
-        // 失败则走随机 ID + 连接到房主
-        try{ p.destroy(); }catch(e){}
-        tryClient();
-      });
-
-      // 超时也切客户端
-      setTimeout(function(){ if(!opened && !anchorOk){ try{p.destroy();}catch(e){} tryClient(); } }, 6000);
-    }
-
-    function tryClient(){
-      var p;
-      try{
-        p=new Peer(null,{host:server.host,port:server.port,secure:server.secure,path:server.path,config:{iceServers:ICE}});
-      }catch(e){ log('Peer init error: '+e.message); return; }
-      self.peer=p;
-      p.on('open', function(id){
-        self.isHub=false; self.localId=id; setStatus(true);
-        log('['+nowStr()+'] 作为客户端上线：'+id);
-        // 连接房主
-        var c;
-        try{ c=p.connect(self.anchorId,{reliable:true}); }catch(e){ return; }
-        handleConn(c,false);
-      });
-      p.on('call', function(call){
-        // 入口页接听
-        if (!haveEntry){ try{ call.close(); }catch(e){} return; }
+      self.peer.on('connection', function(conn){ handleConn(conn,true); });
+      self.peer.on('error', function(err){ self.log('连接错误：'+(err && (err.message||err.type)||err)); });
+      self.peer.on('disconnected', function(){ self.log('信令掉线，尝试重连'); try{ self.peer.reconnect(); }catch(e){} });
+      self.peer.on('close', function(){ self.log('连接已关闭'); });
+      // 媒体通话被呼叫（仅入口页可用）
+      self.peer.on('call', function(call){
+        if (!window.__ENTRY_PAGE__){ try{ call.close(); }catch(e){} return; }
         navigator.mediaDevices.getUserMedia({video:true,audio:true}).then(function(stream){
+          self._media = self._media || {};
           self._media.local = stream;
           var lv=document.getElementById('localVideo'); if(lv) lv.srcObject=stream;
           call.answer(stream);
           self._media.call = call;
           call.on('stream', function(remote){ var rv=document.getElementById('remoteVideo'); if(rv) rv.srcObject=remote; });
-          call.on('close', function(){ self.toggleCall(); });
-          call.on('error', function(){ self.toggleCall(); });
+          call.on('close', function(){ self.toggleCall(true); });
+          call.on('error', function(){ self.toggleCall(true); });
         }).catch(function(){ try{ call.close(); }catch(e){} });
       });
-      p.on('error', function(err){ log('peer error: '+(err&&err.type||err)); });
     }
 
-    function disconnect(){
-      // 关通话
-      if (self._media.call){ try{ self._media.call.close(); }catch(e){} self._media.call=null; }
-      if (self._media.local){ try{ self._media.local.getTracks().forEach(t=>t.stop()); }catch(e){} self._media.local=null; }
-      // 关数据
-      for (var k in self.conns){ try{ self.conns[k].conn.close(); }catch(e){} }
-      self.conns={}; routes={}; self.users.clear();
-      if (self.peer){ try{ self.peer.destroy(); }catch(e){} self.peer=null; }
-      self.localId=''; self.isHub=false;
-      setStatus(false); broadcastUsers();
-      log('['+nowStr()+'] 断开');
+    function connectPeer(pid){
+      if(!self.peer || !pid || pid===self.localId) return;
+      if(self.conns[pid] && self.conns[pid].open) return;
+      self.log('拨号：'+pid);
+      var c;
+      try{ c=self.peer.connect(pid,{reliable:true}); }
+      catch(e){ self.log('拨号失败：'+(e.message||e)); return; }
+      handleConn(c,false);
+      setTimeout(function(){
+        var st=self.conns[pid];
+        if(!st||!st.open){
+          try{ c.close(); }catch(e){}
+          self.log('对端未响应：'+shortId(pid));
+        }
+      },12000);
     }
 
-    function handleConn(conn, inbound){
-      if(!conn) return;
-      var pid = conn.peer;
-      self.conns[pid] = {conn:conn, open:false};
+    function handleConn(c,inbound){
+      if(!c||!c.peer) return;
+      var pid=c.peer;
+      if(self.conns[pid] && self.conns[pid].open){
+        try{ c.close(); }catch(e){}
+        return;
+      }
+      if(!self.conns[pid]) {
+        self.conns[pid]={ conn:c, open:false, latency:0, sending:false, queue:[], recv:{cur:null,ui:null}, _curSend:{} };
+      }
 
-      conn.on('open', function(){
+      if(inbound) self.log('收到入站连接：'+shortId(pid));
+
+      c.on('open', function(){
         self.conns[pid].open=true;
-        // hello 握手：带昵称
-        try{ conn.send({type:'hello', id:self.localId, name: self.myName || ('用户-'+short(self.localId))}); }catch(e){}
-        if (!self.isHub){
-          // 客户端连上房主后，设置房主和自己
-          setUser(self.localId, self.myName || ('用户-'+short(self.localId)));
-        }
-      });
-
-      conn.on('data', function(d){
-        // JSON or ArrayBuffer?
-        if (d && (d.byteLength===undefined) && typeof d==='object' && d.type){
-          // 控制面
-          if (self.isHub){
-            // 房主：处理来自客户端的控制
-            if (d.type==='hello'){
-              // 记录用户并广播
-              setUser(pid, d.name||('用户-'+short(pid)));
-              // 同步用户列表给这个客户端
-              var list=[]; self.users.forEach(function(v){ list.push({id:v.id,name:v.name}); });
-              try{ conn.send({type:'users', users:list}); }catch(e){}
-            }else if (d.type==='msg'){
-              routeText(d.from||pid, d.to||'all', String(d.text||''));
-            }else if (d.type==='file-begin'){
-              // 建立路由并把 meta 发给目标
-              var fromId=d.from||pid, to=d.to||'all';
-              routes[d.fid]={fromId:fromId, toIds:new Set()};
-              var targets=[];
-              if (to==='all'){
-                targets = Object.keys(self.conns).filter(function(x){ return x!==fromId; });
-              }else{
-                if (self.conns[to]) targets=[to];
-              }
-              // 记路由
-              targets.forEach(function(x){ routes[d.fid].toIds.add(x); });
-              // 转发 meta
-              targets.forEach(function(x){ var st=self.conns[x]; if(st&&st.open) try{ st.conn.send(d); }catch(e){} });
-            }else if (d.type==='file-end' || d.type==='file-resume'){
-              // 路由给目标或发送者
-              if (d.type==='file-resume'){
-                var st=self.conns[d.to]; if(st&&st.open) try{ st.conn.send(d); }catch(e){}
-              }else{
-                var route=routes[d.fid]; if(!route) return;
-                route.toIds.forEach(function(x){ var st=self.conns[x]; if(st&&st.open) try{ st.conn.send(d); }catch(e){} });
-                if (d.type==='file-end'){ delete routes[d.fid]; }
-              }
-            }
-          }else{
-            // 客户端：处理房主下发
-            if (d.type==='hello'){
-              // 可忽略
-            }else if (d.type==='users'){
-              // 同步用户列表
-              self.users.clear(); (d.users||[]).forEach(function(u){ self.users.set(u.id,{id:u.id,name:u.name}); });
-              if (self._classic && typeof self._classic.renderContacts==='function'){
-                var list=[]; self.users.forEach(function(v){ list.push({id:v.id,name:v.name}); });
-                self._classic.renderContacts(list, self.activePeer);
-              }
-              updateEntryChips();
-            }else if (d.type==='msg'){
-              // 显示消息
-              if (self._classic && typeof self._classic.appendChat==='function'){
-                self._classic.appendChat(String(d.text||''), d.from===self.localId);
-              }
-            }else if (d.type==='file-begin'){
-              handleIncomingFileBegin(d);
-            }else if (d.type==='file-end'){
-              finalizeIncomingFile(d);
-            }else if (d.type==='file-resume'){
-              // 我是发送方：从 offset 续传
-              resumeSendFromOffset(d);
-            }
-          }
-        }else if (d && d.byteLength!==undefined){
-          // 二进制：文件数据
-          if (self.isHub){
-            // 房主转发：找到属于哪个 fid（简化：每个连接同一时间只传一个）
-            // 这里我们不解析 fid，只要该连接最近的 fid 在 routes 中，即转发
-            // 为保证确定性，anchor 仅支持“一个连接同一时间一个文件”
-            // 因为 file-begin 一定先到，这里遍历 routes 找 fromId==pid 的项
-            for (var fid in routes){
-              if (routes[fid] && routes[fid].fromId===pid){
-                routes[fid].toIds.forEach(function(x){ var st=self.conns[x]; if(st&&st.open) try{ st.conn.send(d); }catch(e){} });
-                break;
-              }
-            }
-          }else{
-            handleIncomingFileChunk(d);
-          }
-        }
-      });
-
-      conn.on('close', function(){
-        if (self.isHub){
-          // 客户端离线
-          delUser(pid);
-        }
-        delete self.conns[pid];
-        updateEntryChips();
-      });
-
-      conn.on('error', function(err){ /* 忽略 */ });
-    }
-
-    // 发送端收到 file-resume：从 offset 继续
-    function resumeSendFromOffset(req){
-      // 仅客户端路径支持（发送方为本端）
-      // 在我们简化的实现中，不缓存整个文件对象引用；因此断点续传仅在“同一会话未刷新”的情况下可靠；
-      // 刷新后依赖 IDB 的完整命中（已做）。如需真正跨刷新续传，需要把 File 句柄固化（受浏览器限制有限）。
-      // 这里做最小实现：忽略（发送侧不持久化 File）。
-      // 可扩展：把最近一次发送的 File 保存在 self._lastSend[hash] 里，这里拿到继续读。
-    }
-
-    // classic UI 绑定（不改 UI 页面）
-    function bindClassicUI(app){
-      if (!window.__CLASSIC_UI__) return;
-
-      var editor = document.getElementById('editor');
-      var sendBtn = document.getElementById('sendBtn');
-      var fileInput = document.getElementById('fileInput');
-      var msgScroll = document.getElementById('msgScroll');
-      var contactList = document.getElementById('contactList');
-      var contactSearch = document.getElementById('contactSearch');
-      var sendArea = document.getElementById('sendArea');
-      var statusChip = document.getElementById('statusChip');
-      var onlineChip = document.getElementById('onlineChip');
-
-      // 运行时修复“所有人（群聊）”文案可能的乱码
-      function fixAllLabel(){
+        self.updateInfo();
         try{
-          var el = contactList && contactList.querySelector('.contact .cname');
-          if (el && /所有.?（群聊）/.test(el.textContent.replace(/\s/g,''))) {
-            el.textContent = '所有人（群聊）';
-          }
+          c.send({
+            type:'hello',
+            id:self.localId,
+            name:self.myName,
+            ip:self.virtualIp,
+            network:self.network,
+            fullList:Object.keys(self.fullSources)
+          });
         }catch(e){}
-      }
+      });
 
-      function textOfEditor(){
-        if (!editor) return '';
-        var t = editor.innerText || editor.textContent || '';
-        return t.replace(/\u00A0/g,' ').replace(/\r/g,'').trim();
-      }
-      function clearEditor(){ if(editor){ editor.innerHTML=''; editor.textContent=''; } }
-      function syncSendBtn(){
-        if (!sendBtn) return;
-        var hasText = textOfEditor().length>0;
-        sendBtn.disabled = !(app && app.connected && hasText);
-      }
-
-      app._classic = {
-        appendChat: function(text, mine){
-          if (!msgScroll) return;
-          var row=document.createElement('div'); row.className='row'+(mine?' right':'');
-          var av=document.createElement('div'); av.className='avatar-sm';
-          var lt=document.createElement('span'); lt.className='letter'; lt.textContent = mine ? '我' : '他';
-          av.appendChild(lt);
-          var bubble=document.createElement('div'); bubble.className='bubble'+(mine?' me':''); bubble.textContent=String(text||'');
-          if (mine){ row.appendChild(bubble); row.appendChild(av); } else { row.appendChild(av); row.appendChild(bubble); }
-          msgScroll.appendChild(row); msgScroll.scrollTop = msgScroll.scrollHeight;
-        },
-        placeholder: function(name,size,mine){
-          if(!msgScroll) return null;
-          var row=document.createElement('div'); row.className='row'+(mine?' right':'');
-          var av=document.createElement('div'); av.className='avatar-sm';
-          var lt=document.createElement('span'); lt.className='letter'; lt.textContent = mine ? '我' : '他';
-          av.appendChild(lt);
-          var bubble=document.createElement('div'); bubble.className='bubble file'+(mine?' me':'');
-          var safe = String(name||'文件').replace(/"/g,'&quot;');
-          bubble.innerHTML = '<div class="file-link"><div class="file-info"><span class="file-icon">📄</span>'
-                           + '<span class="file-name" title="'+safe+'">'+safe+'</span></div>'
-                           + '<div class="progress-line">准备接收…</div></div>';
-          if (mine){ row.appendChild(bubble); row.appendChild(av); } else { row.appendChild(av); row.appendChild(bubble); }
-          msgScroll.appendChild(row); msgScroll.scrollTop=msgScroll.scrollHeight;
-          return {root:row, progress:bubble.querySelector('.progress-line'), mediaWrap:bubble};
-        },
-        showImage: function(ui,url){
-          if(!ui||!ui.mediaWrap) return;
-          ui.mediaWrap.classList.add('media');
-          ui.mediaWrap.innerHTML = '<a href="'+url+'" target="_blank" rel="noopener" class="thumb-link">'
-                                 + '<img class="thumb img" src="'+url+'"></a>';
-        },
-        showVideo: function(ui,url,info,restore){
-          if(!ui||!ui.mediaWrap) return;
-          ui.mediaWrap.classList.add('media');
-          var bg = ui.poster ? ' style="background-image:url('+ui.poster+')"':'';
-          ui.mediaWrap.innerHTML = '<a href="'+url+'" target="_blank" rel="noopener" class="thumb-link">'
-                                 + '<div class="thumb video"'+bg+'><div class="play">▶</div></div></a>'
-                                 + (info?'<div class="progress-line">'+info+'</div>':'');
-        },
-        showFileLink: function(ui,url,name,size){
-          if(!ui||!ui.mediaWrap) return;
-          var safe=String(name||'文件').replace(/"/g,'&quot;');
-          ui.mediaWrap.classList.remove('media');
-          ui.mediaWrap.innerHTML = '<a href="'+url+'" target="_blank" rel="noopener" class="file-link" title="'+safe+'">'
-                                 + '<div class="file-info"><span class="file-icon">📄</span><span class="file-name">'+safe+'</span></div>'
-                                 + '<div class="progress-line">下载：'+safe+' ('+human(size||0)+')</div></a>';
-        },
-        updateProgress: function(ui,p){ if(ui&&ui.progress) ui.progress.textContent = '接收中… '+p+'%'; },
-        updateStatus: function(){
-          if (statusChip) statusChip.textContent = app.connected ? '已连接' : '未连接';
-          if (onlineChip) onlineChip.textContent = '在线 ' + (app.users.size||0);
-          syncSendBtn();
-        },
-        getEditorText: textOfEditor,
-        clearEditor: clearEditor,
-
-        renderContacts: function(list, activeId){
-          if (!contactList) return;
-          list = list || (function(){ var arr=[]; app.users.forEach(function(v){ arr.push(v); }); return arr; })();
-          var kw = (contactSearch && contactSearch.value || '').trim().toLowerCase();
-          contactList.innerHTML='';
-          // 群聊
-          var all=document.createElement('div'); all.className='contact'+((activeId==='all')?' active':''); all.dataset.id='all';
-          all.innerHTML='<div class="avatar"></div><div><div class="cname">所有人（群聊）</div><div class="cmsg">群聊</div></div>';
-          all.addEventListener('click', function(){
-            app.activePeer='all';
-            contactList.querySelectorAll('.contact.active').forEach(function(el){ el.classList.remove('active'); });
-            all.classList.add('active');
-          });
-          contactList.appendChild(all);
-
-          list.forEach(function(u){
-            if (u.id===app.localId) return; // 列表不显示自己
-            var nm = u.name || ('节点 '+short(u.id));
-            if (kw && nm.toLowerCase().indexOf(kw)===-1) return;
-            var row=document.createElement('div'); row.className='contact'+((activeId===u.id)?' active':''); row.dataset.id=u.id;
-            row.innerHTML='<div class="avatar"></div><div><div class="cname"></div><div class="cmsg">在线</div></div>';
-            row.querySelector('.cname').textContent = nm;
-            row.addEventListener('click', function(){
-              app.activePeer = u.id;
-              contactList.querySelectorAll('.contact.active').forEach(function(el){ el.classList.remove('active'); });
-              row.classList.add('active');
-            });
-            contactList.appendChild(row);
-          });
-
-          fixAllLabel();
-        }
-      };
-
-      if (editor){
-        editor.addEventListener('input', syncSendBtn);
-        var composing=false;
-        editor.addEventListener('compositionstart', function(){ composing=true; });
-        editor.addEventListener('compositionend', function(){ composing=false; });
-        editor.addEventListener('keydown', function(e){
-          if (e.key==='Enter' && !e.shiftKey && !composing){ e.preventDefault(); app.sendMsg(); }
-        });
-      }
-      var emojiBtn=document.getElementById('emojiBtn');
-      if (emojiBtn && editor){
-        emojiBtn.addEventListener('click', function(){
-          editor.focus();
-          try{ document.execCommand('insertText', false, '😀'); }catch(e){
-            var r=document.createRange(); r.selectNodeContents(editor); r.collapse(false);
-            var s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
-            var node=document.createTextNode('😀'); r.insertNode(node);
+      c.on('data', function(d){
+        if(d && typeof d==='object' && d.type){
+          // 控制消息
+          if(d.type==='hello'){
+            self.displayNames[pid] = d.name || ('节点 '+shortId(pid));
+            if (d.fullList && Array.isArray(d.fullList)){
+              d.fullList.forEach(function(h){
+                self.fullSources[h]=self.fullSources[h]||new Set();
+                self.fullSources[h].add(pid);
+              });
+            }
+            // 刷新联系人
+            if(self._classic && self._classic.renderContacts){
+              var arr=[]; for(var k in self.conns){ if(self.conns[k].open) arr.push({id:k,name:self.displayNames[k]||('节点 '+shortId(k))}); }
+              self._classic.renderContacts(arr, self.activePeer);
+            }
           }
-          syncSendBtn();
-        });
-      }
-      if (sendBtn){ sendBtn.addEventListener('click', function(){ app.sendMsg(); }); }
-      if (fileInput){ fileInput.addEventListener('change', function(e){ var files=[].slice.call(e.target.files||[]); if(files.length) app.sendFilesFrom(files); e.target.value=''; }); }
+          else if(d.type==='ping'){
+            if(self.conns[pid].open){ try{ c.send({type:'pong',ts:d.ts}); }catch(e){} }
+          }
+          else if(d.type==='pong'){
+            var lat=Date.now()-(d.ts||Date.now());
+            self.conns[pid].latency=lat;
+            self.log('延迟：'+lat+'ms');
+            self.updateInfo();
+          }
+          else if(d.type==='chat'){
+            pushChat(String(d.text||''), false);
+            self.log('收到消息');
+          }
+          else if(d.type==='file-begin'){
+            // 命中完整缓存 -> 秒回
+            var h=d.hash||'';
+            var ui=placeholder(d.name||'文件', d.size||0, false);
+            if ((d.mime||'').indexOf('video/')===0 && d.poster){ ui.poster = d.poster; showVid(ui,'#','等待数据…'); }
 
-      // 拖拽
-      if (sendArea){
-        function onDragEnter(e){ e.preventDefault(); sendArea.classList.add('drag-over'); }
-        function onDragOver(e){ e.preventDefault(); }
-        function onDragLeave(e){ e.preventDefault(); if(e.target===sendArea || !sendArea.contains(e.relatedTarget)) sendArea.classList.remove('drag-over'); }
-        function onDrop(e){ e.preventDefault(); sendArea.classList.remove('drag-over'); var files=[].slice.call((e.dataTransfer&&e.dataTransfer.files)||[]); if(files.length) app.sendFilesFrom(files); }
-        sendArea.addEventListener('dragenter', onDragEnter);
-        sendArea.addEventListener('dragover', onDragOver);
-        sendArea.addEventListener('dragleave', onDragLeave);
-        sendArea.addEventListener('drop', onDrop);
-      }
+            if(h){
+              idbGetFull(h, function(rec){
+                if(rec && rec.blob){
+                  var url=URL.createObjectURL(rec.blob);
+                  if ((rec.meta && rec.meta.mime || '').indexOf('image/')===0) showImg(ui,url);
+                  else if ((rec.meta && rec.meta.mime || '').indexOf('video/')===0) showVid(ui,url,'本地缓存');
+                  else fileLink(ui,url, (rec.meta && rec.meta.name)||d.name||'文件', (rec.meta && rec.meta.size)||d.size||0);
+                  setTimeout(function(){ try{URL.revokeObjectURL(url);}catch(e){} },60000);
+                  try{ c.send({type:'file-end',id:d.id,hash:h}); }catch(e){}
+                  return;
+                }
+                // 命中部分 -> 续传请求
+                idbGetPart(h, function(rec2){
+                  if(rec2 && rec2.meta && typeof rec2.meta.got==='number' && rec2.meta.got<(d.size||0)){
+                    try{ c.send({type:'file-resume', id:d.id, hash:h, offset:rec2.meta.got}); }catch(e){}
+                  }
+                });
+              });
+            }
 
-      if (contactSearch){ contactSearch.addEventListener('input', function(){
-        var arr=[]; app.users.forEach(function(v){ arr.push(v); });
-        app._classic.renderContacts(arr, app.activePeer);
-      }); }
+            self.conns[pid].recv.cur={
+              id:d.id, name:d.name, size:d.size||0, mime:d.mime||'application/octet-stream',
+              got:0, parts:[], previewed:false, previewUrl:null, videoState:null, hash:h
+            };
+            self.conns[pid].recv.ui=ui;
+          }
+          else if(d.type==='file-end'){
+            finalizeReceive(pid,d.id,d.hash||'');
+          }
+          else if(d.type==='file-has'){
+            var h2=d.hash;
+            if(h2){
+              self.fullSources[h2]=self.fullSources[h2]||new Set();
+              self.fullSources[h2].add(pid);
+            }
+          }
+          else if(d.type==='file-resume'){
+            // 发送方收到续传请求
+            var st=self.conns[pid];
+            if (st && st._curSend && st._curSend[d.id] && typeof d.offset==='number'){
+              try{ st._curSend[d.id].setOffset(d.offset|0); }catch(e){}
+            }
+          }
+          return;
+        }
 
-      // 初始状态
-      app._classic.updateStatus();
+        // 二进制（文件数据）
+        var st=self.conns[pid],
+            ctx=st&&st.recv&&st.recv.cur,
+            ui=st&&st.recv&&st.recv.ui;
+        if(!ctx) return;
+
+        var sz=0;
+        if(d && d.byteLength!==undefined){ sz=d.byteLength; ctx.parts.push(new Blob([d])); }
+        else if(d && d.size!==undefined){ sz=d.size; ctx.parts.push(d); }
+        ctx.got+=sz;
+        var pct=ctx.size?Math.min(100,Math.floor(ctx.got*100/ctx.size)):0;
+        updProg(ui,pct);
+
+        // 分段持久（每2MB）
+        if(ctx.hash && ctx.got>0 && (ctx.got % (2*1024*1024) < sz)){
+          try{ idbPutPart(ctx.hash,{name:ctx.name,size:ctx.size,mime:ctx.mime, got:ctx.got}); }catch(e){}
+        }
+
+        // 预览
+        if(!ctx.previewed){
+          try{
+            var url=URL.createObjectURL(new Blob(ctx.parts,{type:ctx.mime}));
+            if ((ctx.mime||'').indexOf('image/')===0){
+              showImg(ui,url); ctx.previewed=true; ctx.previewUrl=url;
+            }else if ((ctx.mime||'').indexOf('video/')===0){
+              var need=Math.max(1,Math.floor(ctx.size*self.previewPct/100));
+              if(ctx.got>=need){ showVid(ui,url,'可预览（接收中 '+pct+'%）'); ctx.previewed=true; ctx.previewUrl=url; }
+              else { try{ URL.revokeObjectURL(url);}catch(e){} }
+            }
+          }catch(e){}
+        }
+      });
+
+      c.on('close', function(){
+        delete self.conns[pid];
+        self.updateInfo();
+      });
+
+      c.on('error', function(err){ /* 忽略 */ });
     }
 
-    // 导出
-    window.app=self;
+    function finalizeReceive(pid,id,hash){
+      var st=self.conns[pid]; if(!st||!st.recv) return;
+      var ctx=st.recv.cur, ui=st.recv.ui;
+      if(!ctx||ctx.id!==id) return;
 
-    // UI 页面复用入口实例：若是 classic.html 且 opener 有 app，则不重新连接
-    if (window.__CLASSIC_UI__ && window.__USE_OPENER_APP__ && window.opener && window.opener.app){
-      window.app = window.opener.app;
-      return;
+      var blob=new Blob(ctx.parts,{type:ctx.mime});
+      var url=URL.createObjectURL(blob);
+
+      if ((ctx.mime||'').indexOf('image/')===0) showImg(ui,url);
+      else if ((ctx.mime||'').indexOf('video/')===0) showVid(ui,url,'接收完成');
+      else fileLink(ui,url,ctx.name,ctx.size);
+
+      try{
+        idbPutFull(hash||ctx.hash||'', blob, {name:ctx.name,size:ctx.size,mime:ctx.mime});
+        if (ctx.hash) idbDelPart(ctx.hash);
+        self.fullSources[hash||ctx.hash||'']=self.fullSources[hash||ctx.hash||'']||new Set();
+        self.fullSources[hash||ctx.hash||''].add(self.localId);
+        for(var k in self.conns){
+          var s=self.conns[k]; if(s.open){ try{ s.conn.send({type:'file-has', hash:(hash||ctx.hash||'')}); }catch(e){} }
+        }
+      }catch(e){}
+
+      try{ if(ctx.previewUrl) URL.revokeObjectURL(ctx.previewUrl);}catch(e){}
+      (function(u){ setTimeout(function(){ try{URL.revokeObjectURL(u);}catch(e){} },60000); })(url);
+      st.recv.cur=null; st.recv.ui=null;
+      self.log('已接收文件：'+ctx.name+' '+human(ctx.size));
     }
 
+    function startTimers(){
+      stopTimers();
+      self.timers.up=setInterval(function(){
+        if(!self.isConnected||!self.startAt) return;
+        var s=Math.floor((Date.now()-self.startAt)/1000),
+            h=Math.floor(s/3600),
+            m=Math.floor((s%3600)/60),
+            sec=s%60;
+        var t=(h<10?'0':'')+h+':'+(m<10?'0':'')+m+':'+(sec<10?'0':'')+sec;
+        var up=document.getElementById('uptime'); if(up) up.textContent=t;
+        if (typeof window.updateEntryStatus==='function'){
+          window.updateEntryStatus({connected:true, online:Object.keys(self.conns).filter(k=>self.conns[k].open).length, localId:self.localId, virtualIp:self.virtualIp, uptime:t});
+        }
+      },1000);
+
+      self.timers.ping=setInterval(function(){
+        for(var k in self.conns){
+          var st=self.conns[k]; if(!st.open) continue;
+          try{ st.conn.send({type:'ping',ts:Date.now()}); }catch(e){}
+        }
+      },5000);
+    }
+    function stopTimers(){
+      if(self.timers.up){clearInterval(self.timers.up); self.timers.up=null;}
+      if(self.timers.ping){clearInterval(self.timers.ping); self.timers.ping=null;}
+    }
+
+    self.disconnect=function(){
+      for(var k in self.conns){ try{ self.conns[k].conn.close(); }catch(e){} }
+      self.conns={}; self.fullSources={};
+      if(self.peer){ try{ self.peer.destroy(); }catch(e){} self.peer=null; }
+      self.isConnected=false; self.startAt=0; self.localId=''; self.virtualIp='';
+      setStatus('离线'); self.updateInfo();
+      stopTimers();
+      self.log('已断开');
+    };
+
+    // 入口页：视频通话（仅 1v1，对当前单聊）
+    self.toggleCall=function(forceClose){
+      if (!window.__ENTRY_PAGE__) return;
+      self._media = self._media || {};
+      if (self._media.call || forceClose){
+        try{ self._media.call && self._media.call.close(); }catch(e){}
+        if (self._media.local){ try{ self._media.local.getTracks().forEach(t=>t.stop()); }catch(e){} }
+        self._media.call=null; self._media.local=null;
+        var rv=document.getElementById('remoteVideo'); if(rv) rv.srcObject=null;
+        var lv=document.getElementById('localVideo');  if(lv) lv.srcObject=null;
+        return;
+      }
+      var pid=self.activePeer;
+      if(!pid || pid==='all'){ alert('请先在聊天 UI 里选择一个联系人'); return; }
+      if(!self.peer){ alert('未连接'); return; }
+      navigator.mediaDevices.getUserMedia({video:true,audio:true}).then(function(stream){
+        self._media.local=stream;
+        var lv=document.getElementById('localVideo'); if(lv) lv.srcObject=stream;
+        var call=self.peer.call(pid, stream);
+        self._media.call=call;
+        call.on('stream', function(remote){ var rv=document.getElementById('remoteVideo'); if(rv) rv.srcObject=remote; });
+        call.on('close', function(){ self.toggleCall(true); });
+        call.on('error', function(){ self.toggleCall(true); });
+      }).catch(function(){ alert('无法获取摄像头/麦克风'); });
+    };
+
+    // 经典 UI 绑定（不改 UI 文件）
+    bindClassicUI(self);
+
+    return self;
   })();
 
+  // 经典 UI 适配（仅在 classic.html 生效）
+  function bindClassicUI(app){
+    if (!window.__CLASSIC_UI__) return;
+
+    var editor = document.getElementById('editor');
+    var sendBtn = document.getElementById('sendBtn');
+    var fileInput = document.getElementById('fileInput');
+    var msgScroll = document.getElementById('msgScroll');
+    var contactList = document.getElementById('contactList');
+    var contactSearch = document.getElementById('contactSearch');
+    var sendArea = document.getElementById('sendArea');
+    var statusChip = document.getElementById('statusChip');
+    var onlineChip = document.getElementById('onlineChip');
+
+    function textOfEditor(){
+      if (!editor) return '';
+      var t = editor.innerText || editor.textContent || '';
+      return t.replace(/\u00A0/g,' ').replace(/\r/g,'').trim();
+    }
+    function clearEditor(){ if(editor){ editor.innerHTML=''; editor.textContent=''; } }
+    function syncSendBtn(){
+      if (!sendBtn) return;
+      var hasText = textOfEditor().length>0;
+      sendBtn.disabled = !(app && app.isConnected && hasText);
+    }
+
+    // 运行时修复群聊乱码
+    function fixAllLabel(){
+      try{
+        var rows = contactList.querySelectorAll('.contact');
+        if (rows && rows[0]){
+          var nm = rows[0].querySelector('.cname');
+          if (nm) nm.textContent = '所有人（群聊）';
+        }
+      }catch(e){}
+    }
+
+    app._classic = {
+      appendChat: function(text, mine){
+        if (!msgScroll) return;
+        var row=document.createElement('div'); row.className='row'+(mine?' right':'');
+        var av=document.createElement('div'); av.className='avatar-sm';
+        var lt=document.createElement('span'); lt.className='letter'; lt.textContent = mine ? '我' : '他';
+        av.appendChild(lt);
+        var bubble=document.createElement('div'); bubble.className='bubble'+(mine?' me':''); bubble.textContent=String(text||'');
+        if (mine){ row.appendChild(bubble); row.appendChild(av); } else { row.appendChild(av); row.appendChild(bubble); }
+        msgScroll.appendChild(row); msgScroll.scrollTop = msgScroll.scrollHeight;
+      },
+      placeholder: function(name,size,mine){
+        if(!msgScroll) return null;
+        var row=document.createElement('div'); row.className='row'+(mine?' right':'');
+        var av=document.createElement('div'); av.className='avatar-sm';
+        var lt=document.createElement('span'); lt.className='letter'; lt.textContent = mine ? '我' : '他';
+        av.appendChild(lt);
+        var bubble=document.createElement('div'); bubble.className='bubble file'+(mine?' me':'');
+        var safe = String(name||'文件').replace(/"/g,'&quot;');
+        bubble.innerHTML = '<div class="file-link"><div class="file-info"><span class="file-icon">📄</span>'
+                         + '<span class="file-name" title="'+safe+'">'+safe+'</span></div>'
+                         + '<div class="progress-line">准备接收…</div></div>';
+        if (mine){ row.appendChild(bubble); row.appendChild(av); } else { row.appendChild(av); row.appendChild(bubble); }
+        msgScroll.appendChild(row); msgScroll.scrollTop=msgScroll.scrollHeight;
+        return {root:row, progress:bubble.querySelector('.progress-line'), mediaWrap:bubble};
+      },
+      showImage: function(ui,url){
+        if(!ui||!ui.mediaWrap) return;
+        ui.mediaWrap.classList.add('media');
+        ui.mediaWrap.innerHTML = '<a href="'+url+'" target="_blank" rel="noopener" class="thumb-link">'
+                               + '<img class="thumb img" src="'+url+'"></a>';
+      },
+      // 视频缩略图 + 新窗口打开（不内嵌 video，避免撑破气泡）
+      showVideo: function(ui,url,info){
+        if(!ui||!ui.mediaWrap) return;
+        ui.mediaWrap.classList.add('media');
+        var bg = ui.poster ? ' style="background-image:url('+ui.poster+')"':'';
+        ui.mediaWrap.innerHTML = '<a href="'+url+'" target="_blank" rel="noopener" class="thumb-link">'
+                               + '<div class="thumb video"'+bg+'><div class="play">▶</div></div></a>'
+                               + (info?'<div class="progress-line">'+info+'</div>':'');
+      },
+      showFileLink: function(ui,url,name,size){
+        if(!ui||!ui.mediaWrap) return;
+        var safe=String(name||'文件').replace(/"/g,'&quot;');
+        ui.mediaWrap.classList.remove('media');
+        ui.mediaWrap.innerHTML = '<a href="'+url+'" target="_blank" rel="noopener" class="file-link" title="'+safe+'">'
+                               + '<div class="file-info"><span class="file-icon">📄</span><span class="file-name">'+safe+'</span></div>'
+                               + '<div class="progress-line">下载：'+safe+' ('+human(size||0)+')</div></a>';
+      },
+      updateProgress: function(ui,p){ if(ui&&ui.progress) ui.progress.textContent = '接收中… '+p+'%'; },
+      updateStatus: function(){
+        if (statusChip) statusChip.textContent = app.isConnected ? '已连接' : '未连接';
+        if (onlineChip){
+          var openCount=0; for (var k in app.conns){ if(app.conns[k].open) openCount++; }
+          onlineChip.textContent = '在线 ' + openCount;
+        }
+        syncSendBtn();
+      },
+      getEditorText: textOfEditor,
+      clearEditor: clearEditor,
+
+      // 联系人列表（显示昵称；点击切换 activePeer）
+      renderContacts: function(list, activeId){
+        if (!contactList) return;
+        var kw = (contactSearch && contactSearch.value || '').trim().toLowerCase();
+        contactList.innerHTML='';
+        // 群聊
+        var all=document.createElement('div'); all.className='contact'+((activeId==='all')?' active':''); all.dataset.id='all';
+        all.innerHTML='<div class="avatar"></div><div><div class="cname">所有人（群聊）</div><div class="cmsg">群聊</div></div>';
+        all.addEventListener('click', function(){
+          app.activePeer='all';
+          contactList.querySelectorAll('.contact.active').forEach(function(el){ el.classList.remove('active'); });
+          all.classList.add('active');
+        });
+        contactList.appendChild(all);
+
+        // 在线 peer
+        for (var pid in app.conns){
+          if (!app.conns.hasOwnProperty(pid)) continue;
+          if (!app.conns[pid].open) continue;
+          var nm = app.displayNames[pid] || ('节点 '+pid.substring(0,8));
+          if (kw && nm.toLowerCase().indexOf(kw)===-1) continue;
+          var row=document.createElement('div'); row.className='contact'+((activeId===pid)?' active':''); row.dataset.id=pid;
+          row.innerHTML='<div class="avatar"></div><div><div class="cname"></div><div class="cmsg">在线</div></div>';
+          row.querySelector('.cname').textContent = nm;
+          row.addEventListener('click', function(){
+            app.activePeer = this.dataset.id;
+            contactList.querySelectorAll('.contact.active').forEach(function(el){ el.classList.remove('active'); });
+            this.classList.add('active');
+          });
+          contactList.appendChild(row);
+        }
+        fixAllLabel();
+      }
+    };
+
+    if (editor){
+      editor.addEventListener('input', syncSendBtn);
+      var composing=false;
+      editor.addEventListener('compositionstart', function(){ composing=true; });
+      editor.addEventListener('compositionend', function(){ composing=false; });
+      editor.addEventListener('keydown', function(e){
+        if (e.key==='Enter' && !e.shiftKey && !composing){ e.preventDefault(); app.sendMsg(); }
+      });
+    }
+    var emojiBtn=document.getElementById('emojiBtn');
+    if (emojiBtn && editor){
+      emojiBtn.addEventListener('click', function(){
+        editor.focus();
+        try{ document.execCommand('insertText', false, '😀'); }catch(e){
+          var r=document.createRange(); r.selectNodeContents(editor); r.collapse(false);
+          var s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
+          var node=document.createTextNode('😀'); r.insertNode(node);
+        }
+        syncSendBtn();
+      });
+    }
+    if (sendBtn){ sendBtn.addEventListener('click', function(){ app.sendMsg(); }); }
+    if (fileInput){ fileInput.addEventListener('change', function(e){ var files=[].slice.call(e.target.files||[]); if(files.length) app.sendFilesFrom(files); e.target.value=''; }); }
+
+    if (sendArea){
+      function onDragEnter(e){ e.preventDefault(); sendArea.classList.add('drag-over'); }
+      function onDragOver(e){ e.preventDefault(); }
+      function onDragLeave(e){ e.preventDefault(); if(e.target===sendArea || !sendArea.contains(e.relatedTarget)) sendArea.classList.remove('drag-over'); }
+      function onDrop(e){ e.preventDefault(); sendArea.classList.remove('drag-over'); var files=[].slice.call((e.dataTransfer&&e.dataTransfer.files)||[]); if(files.length) app.sendFilesFrom(files); }
+      sendArea.addEventListener('dragenter', onDragEnter);
+      sendArea.addEventListener('dragover', onDragOver);
+      sendArea.addEventListener('dragleave', onDragLeave);
+      sendArea.addEventListener('drop', onDrop);
+    }
+
+    if (contactSearch){ contactSearch.addEventListener('input', function(){
+      var arr=[]; for (var k in app.conns){ if(app.conns[k].open) arr.push({id:k,name: app.displayNames[k]||('节点 '+k.substring(0,8))}); }
+      app._classic.renderContacts(arr, app.activePeer);
+    }); }
+
+    // 初始状态
+    app._classic.updateStatus();
+  }
+
+  // 导出实例
+  // 经典 UI 页复用入口页实例
+  if (window.__CLASSIC_UI__ && window.__USE_OPENER_APP__ && window.opener && window.opener.app){
+    window.app = window.opener.app;
+    bindClassicUI(window.app);
+  }else{
+    window.app = app;
+    if (window.__CLASSIC_UI__) bindClassicUI(app);
+  }
 })();

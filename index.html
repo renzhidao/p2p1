@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>P2P 固定入口</title>
+  <title>P2P 固定入口（连接配置）</title>
   <style>
     *{box-sizing:border-box}
     body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,'Noto Sans','PingFang SC','Microsoft YaHei',sans-serif;background:#0f1115;color:#e6e6e6}
-    .wrap{max-width:800px;margin:30px auto;padding:16px}
+    .wrap{max-width:820px;margin:30px auto;padding:16px}
     .card{border:1px solid #232634;border-radius:12px;padding:16px;background:#0b0d12}
     h1{margin:0 0 8px;font-size:20px}
     .row{display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap}
@@ -17,28 +17,48 @@
     .btn[disabled]{opacity:.5;cursor:not-allowed}
     .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
     .chip{padding:4px 10px;border-radius:999px;border:1px solid #2a3142;background:#0e1422;color:#a9c6ff;font-size:12px}
+    .box{border:1px solid #232634;border-radius:10px;padding:12px;background:#0a0c10;margin-top:12px}
+    .muted{color:#9aa7b4;font-size:12px}
     .log{margin-top:12px;background:#0a0c10;border:1px solid #232634;border-radius:10px;padding:10px;height:220px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;white-space:pre-wrap;color:#9fe3a6}
-    .vid{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
-    video{max-width:100%;background:#000;border-radius:8px}
+    .vid{margin-top:10px;display:flex;gap:10px;flex-wrap:wrap}
+    video{max-width:380px;background:#000;border-radius:8px}
+    .qr{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <h1>🚀 P2P 固定入口</h1>
+      <h1>🚀 固定入口 · P2P 连接配置</h1>
+      <div class="muted">入口固定；聊天 UI 使用原版样式（classic.html），无需修改。</div>
+
       <div class="row">
-        <input id="nickname" type="text" placeholder="输入你的昵称（可留空随机）" />
-        <button id="connectBtn" class="btn">连接</button>
-        <button id="openUIBtn" class="btn secondary">打开聊天 UI</button>
+        <input id="networkName" type="text" value="public-network" placeholder="网络名称（仅用于显示）" />
+        <input id="nickname" type="text" placeholder="你的昵称（可留空随机）" />
+        <button id="connectBtn" class="btn">🔌 连接网络</button>
+        <button class="btn secondary" id="openUI">打开聊天 UI</button>
       </div>
+
       <div class="chips">
-        <span class="chip" id="statusChip">未连接</span>
-        <span class="chip" id="onlineChip">在线 0</span>
-        <span class="chip" id="roleChip">角色 - 未知</span>
+        <span class="chip">本地 ID：<b id="localId">-</b></span>
+        <span class="chip">虚拟 IP：<b id="virtualIp">-</b></span>
+        <span class="chip">在线节点：<b id="peerCount">0</b></span>
+        <span class="chip">运行时长：<b id="uptime">00:00:00</b></span>
+        <span class="chip" id="statusChip">状态：离线</span>
+      </div>
+
+      <div id="share" class="box" style="display:none">
+        <div class="row" style="margin:0">
+          <input id="shareLink" readonly />
+          <button class="btn" id="copyShare">复制邀请链接</button>
+        </div>
+        <div class="qr">
+          <div id="qr" style="width:150px;height:150px;border:1px solid #2a3142;border-radius:8px;background:#fff"></div>
+          <div class="muted">使用方法：设备 A 连接后复制此链接/扫码分享给 B；设备 B 打开后也点击“连接网络”。</div>
+        </div>
       </div>
 
       <div class="row" style="margin-top:14px">
-        <button id="callBtn" class="btn secondary" disabled>发起/结束视频通话（对当前单聊对象）</button>
+        <button id="callBtn" class="btn secondary" disabled>🎥 发起/结束视频通话（当前单聊）</button>
       </div>
       <div class="vid">
         <div>
@@ -51,67 +71,79 @@
         </div>
       </div>
 
-      <div id="log" class="log"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn secondary" id="copyLog">复制全部日志</button>
+        <button class="btn secondary" id="clearLog">清空日志</button>
+      </div>
+      <div id="log" class="log">> 就绪：点击“连接网络”开始</div>
+
+      <div class="muted" style="margin-top:8px">
+        说明：如果某些网络无法直连，视频通话可能失败（不强求）。文件：图片即显；视频先显示封面，达到一定数据后可播放。
+      </div>
     </div>
   </div>
 
   <script>
+    // 固定信令与网络名（可按需替换）
     window.__FIXED_SERVER__  = { host:'peerjs.92k.de', port:443, secure:true, path:'/' };
     window.__FIXED_NETWORK__ = 'public-network';
-    window.__ENTRY_PAGE__    = true;  // 入口页
+    window.__ENTRY_PAGE__    = true;   // 入口页标记（视频通话 UI 只在本页）
   </script>
   <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
+  <script src="easytier.js"></script>
   <script>
-    // 简化的 UI 逻辑，按钮 -> app
+    // 入口页 UI 事件（不改经典 UI）
     const $ = s => document.querySelector(s);
     const logEl = $('#log');
     function log(s){ logEl.textContent += (logEl.textContent ? '\n' : '') + s; logEl.scrollTop = logEl.scrollHeight; }
+    window._entryLog = log;
 
-    (function bootstrap(){
-      const nickIpt = $('#nickname');
-      const saved = localStorage.getItem('nickname') || '';
-      if (saved) nickIpt.value = saved;
-
+    document.addEventListener('DOMContentLoaded', function(){
       const connectBtn = $('#connectBtn');
-      const openUIBtn  = $('#openUIBtn');
+      const openUI     = $('#openUI');
+      const copyShare  = $('#copyShare');
+      const copyLogBtn = $('#copyLog');
+      const clearLogBtn= $('#clearLog');
       const callBtn    = $('#callBtn');
-      const statusChip = $('#statusChip');
-      const onlineChip = $('#onlineChip');
-      const roleChip   = $('#roleChip');
+      const nickIpt    = $('#nickname');
 
-      window.updateEntryChips = function(state){
-        statusChip.textContent = state.connected ? '已连接' : '未连接';
-        onlineChip.textContent = '在线 ' + (state.online||0);
-        roleChip.textContent   = state.isHub ? '房主' : '客户端';
-        callBtn.disabled = !state.connected;
-        connectBtn.textContent = state.connected ? '断开' : '连接';
+      const savedNick = localStorage.getItem('nickname') || '';
+      if (savedNick) nickIpt.value = savedNick;
+
+      connectBtn.addEventListener('click', ()=>{
+        localStorage.setItem('nickname', (nickIpt.value||'').trim());
+        if (window.app) app.toggle();
+      });
+      openUI.addEventListener('click', ()=> window.open('classic.html','_blank'));
+      copyShare.addEventListener('click', ()=> window.app && app.copyLink());
+      copyLogBtn.addEventListener('click', ()=> window.app && app.copyLog());
+      clearLogBtn.addEventListener('click', ()=> window.app && app.clearLog());
+      callBtn.addEventListener('click', ()=> window.app && app.toggleCall());
+
+      // 提供入口页状态更新钩子
+      window.updateEntryStatus = function(state){
+        $('#statusChip').textContent = '状态：' + (state.connected ? '在线' : '离线');
+        $('#peerCount').textContent = String(state.online||0);
+        $('#localId').textContent   = state.localId || '-';
+        $('#virtualIp').textContent = state.virtualIp || '-';
+        $('#uptime').textContent    = state.uptime || '00:00:00';
+        $('#share').style.display   = state.connected ? 'block' : 'none';
+        $('#callBtn').disabled      = !state.connected;
+        connectBtn.textContent      = state.connected ? '🔌 断开' : '🔌 连接网络';
       };
 
-      openUIBtn.addEventListener('click', ()=> window.open('classic.html','_blank'));
-      connectBtn.addEventListener('click', ()=>{
-        const name = (nickIpt.value||'').trim();
-        localStorage.setItem('nickname', name);
-        if (!window.app) { log('app 尚未加载'); return; }
-        window.app.toggle();
-      });
+      // 自动连接（可按需关掉）
+      if (window.app && !app.isConnected) app.toggle();
+    });
 
-      // 视频通话（仅入口页）
-      callBtn.addEventListener('click', ()=>{
-        if (!window.app) return;
-        window.app.toggleCall();
-      });
-
-      // 打开/关闭时提示
-      window.addEventListener('beforeunload', (e)=>{
-        if (window.app && app.connected) {
-          e.preventDefault();
-          e.returnValue = '关闭页面将断开连接，确定吗？';
-        }
-      });
-
-      window._entryLog = log;
-    })();
+    window.addEventListener('beforeunload', function(e){
+      if (window.app && app.isConnected) {
+        e.preventDefault();
+        e.returnValue = '关闭页面将断开连接，确定吗？';
+      }
+    });
   </script>
-  <script src="easytier.js"></script>
 </body>
 </html>
+
