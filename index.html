@@ -1,199 +1,74 @@
-
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EasyTier Web 节点</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container {
-            background: white;
-            border-radius: 20px;
-            padding: 40px;
-            max-width: 720px;
-            margin: 20px auto;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        h1 { color: #333; margin-bottom: 10px; font-size: 28px; }
-        .status {
-            display: inline-block;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: bold;
-            margin-bottom: 20px;
-        }
-        .status.offline { background: #fee; color: #c33; }
-        .status.online { background: #efe; color: #3c3; }
-        .status.connecting { background: #ffa; color: #a93; }
-        .input-group { margin-bottom: 12px; }
-        label { display: block; margin-bottom: 6px; color: #666; font-size: 14px; }
-        input, button {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 16px;
-        }
-        button {
-            background: #667eea;
-            color: white;
-            border: none;
-            cursor: pointer;
-            font-weight: bold;
-            margin-top: 8px;
-        }
-        button:hover { background: #5568d3; }
-        button:disabled { background: #ccc; cursor: not-allowed; }
-        .info-box {
-            background: #f5f5f5;
-            padding: 16px;
-            border-radius: 10px;
-            margin-top: 10px;
-        }
-        .info-item {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 8px;
-            font-size: 14px;
-        }
-        .info-label { color: #666; }
-        .info-value { font-weight: bold; color: #333; font-family: monospace; }
-        .share {
-            display: none;
-            margin-top: 16px;
-            padding: 16px;
-            background: #fff7e6;
-            border: 1px solid #ffe1a6;
-            border-radius: 10px;
-        }
-        #qr { 
-            width: 160px; 
-            height: 160px;
-            margin: 10px auto;
-            background: #fff;
-            border: 1px solid #ddd;
-        }
-        .chat-box {
-            display: none;
-            margin-top: 16px;
-            border: 2px solid #667eea;
-            border-radius: 10px;
-            overflow: hidden;
-        }
-        .chat-messages {
-            height: 200px;
-            overflow-y: auto;
-            padding: 12px;
-            background: #f9f9f9;
-        }
-        .chat-msg {
-            margin-bottom: 8px;
-            padding: 8px;
-            border-radius: 6px;
-            font-size: 14px;
-        }
-        .chat-msg.me {
-            background: #e3f2fd;
-            text-align: right;
-        }
-        .chat-msg.peer {
-            background: #fff;
-            border: 1px solid #eee;
-        }
-        .chat-msg .time {
-            font-size: 11px;
-            color: #999;
-            margin-bottom: 4px;
-        }
-        .chat-input {
-            display: flex;
-            border-top: 1px solid #ddd;
-            background: #fff;
-        }
-        .chat-input input {
-            flex: 1;
-            border: none;
-            border-radius: 0;
-            margin: 0;
-        }
-        .chat-input button {
-            width: auto;
-            padding: 12px 24px;
-            border-radius: 0;
-            margin: 0;
-        }
-        .log {
-            background: #1e1e1e;
-            color: #0f0;
-            padding: 12px;
-            border-radius: 8px;
-            height: 180px;
-            overflow-y: auto;
-            font-family: monospace;
-            font-size: 12px;
-            margin-top: 16px;
-            white-space: pre-wrap;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P2P 节点</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#fafafa;color:#333;padding:16px}
+    .wrap{max-width:720px;margin:0 auto;background:#fff;border:1px solid #eee;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.06);padding:20px}
+    h1{font-size:20px;margin-bottom:8px}
+    .status{display:inline-block;padding:6px 10px;border-radius:20px;font-size:12px;margin:8px 0}
+    .offline{background:#fee;color:#b30000}
+    .online{background:#eefbe7;color:#1b7a00}
+    .connecting{background:#fff5cc;color:#996800}
+    .row{display:flex;gap:8px;margin:10px 0}
+    .row input{flex:1;padding:10px;border:1px solid #ddd;border-radius:8px}
+    .row button{padding:10px 14px;border:0;border-radius:8px;background:#4f6ef7;color:#fff;font-weight:600}
+    .info{background:#f7f7f7;border:1px solid #eee;border-radius:8px;padding:10px;margin-top:8px;font-size:14px}
+    .info div{display:flex;justify-content:space-between;margin:6px 0}
+    .share{display:none;margin-top:12px;border:1px dashed #f0b400;background:#fff9e6;border-radius:8px;padding:10px}
+    #qr{width:150px;height:150px;margin-top:10px;background:#fff;border:1px solid #eee;border-radius:6px;display:flex;align-items:center;justify-content:center}
+    .chat{display:none;margin-top:12px;border:1px solid #e6e6e6;border-radius:8px;overflow:hidden}
+    .chat-msgs{height:180px;overflow:auto;padding:10px;background:#fafafa}
+    .chat-msg{margin-bottom:8px;padding:6px 8px;border-radius:6px;font-size:14px;max-width:80%}
+    .me{background:#eaf2ff;margin-left:auto}
+    .peer{background:#fff;border:1px solid #eee}
+    .chat-input{display:flex;border-top:1px solid #eee}
+    .chat-input input{flex:1;border:0;padding:10px}
+    .chat-input button{border:0;background:#4f6ef7;color:#fff;padding:10px 14px}
+    pre{background:#111;color:#0f0;border-radius:8px;padding:10px;height:160px;overflow:auto;margin-top:12px;font-family:monospace;font-size:12px;white-space:pre-wrap}
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🚀 EasyTier Web</h1>
-        <span class="status offline" id="status">● 离线</span>
-        
-        <div class="input-group">
-            <label>网络名称</label>
-            <input type="text" id="networkName" value="public-network">
-        </div>
-        
-        <button id="connectBtn" onclick="app.toggle()">🔌 连接网络</button>
-        
-        <div class="info-box">
-            <div class="info-item">
-                <span class="info-label">本地 ID</span>
-                <span class="info-value" id="localId">-</span>
-            </div>
-            <div class="info-item">
-                <span class="info-label">虚拟 IP</span>
-                <span class="info-value" id="virtualIp">-</span>
-            </div>
-            <div class="info-item">
-                <span class="info-label">在线节点</span>
-                <span class="info-value" id="peerCount">0</span>
-            </div>
-            <div class="info-item">
-                <span class="info-label">运行时长</span>
-                <span class="info-value" id="uptime">00:00:00</span>
-            </div>
-        </div>
-        
-        <div class="share" id="shareSection">
-            <input id="shareLink" readonly style="margin-bottom:10px;">
-            <button onclick="app.copyLink()">复制链接</button>
-            <div id="qr"></div>
-        </div>
-        
-        <div class="chat-box" id="chatBox">
-            <div class="chat-messages" id="chatMessages"></div>
-            <div class="chat-input">
-                <input type="text" id="msgInput" placeholder="输入消息..." onkeypress="if(event.keyCode===13)app.sendMsg()">
-                <button onclick="app.sendMsg()">发送</button>
-            </div>
-        </div>
-        
-        <div class="log" id="log">> 初始化中...\n</div>
+  <div class="wrap">
+    <h1>🚀 P2P 节点（安卓兼容版）</h1>
+    <span id="status" class="status offline">● 离线</span>
+
+    <div class="row">
+      <input id="networkName" value="public-network" placeholder="网络名称">
+      <button id="connectBtn" onclick="app.toggle()">🔌 连接网络</button>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
-    <script src="easytier.js"></script>
+    <div class="info">
+      <div><span>本地 ID</span><b id="localId">-</b></div>
+      <div><span>虚拟 IP</span><b id="virtualIp">-</b></div>
+      <div><span>在线节点</span><b id="peerCount">0</b></div>
+      <div><span>运行时长</span><b id="uptime">00:00:00</b></div>
+    </div>
+
+    <div id="share" class="share">
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="shareLink" readonly>
+        <button onclick="app.copy()">复制链接</button>
+      </div>
+      <div id="qr"></div>
+    </div>
+
+    <div id="chat" class="chat">
+      <div id="msgs" class="chat-msgs"></div>
+      <div class="chat-input">
+        <input id="msgInput" placeholder="输入消息后回车或点发送" onkeypress="if(event.keyCode===13)app.send()">
+        <button onclick="app.send()">发送</button>
+      </div>
+    </div>
+
+    <pre id="log">> 初始化中...</pre>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
+  <script src="easytier.js"></script>
 </body>
 </html>
