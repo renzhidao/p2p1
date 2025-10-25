@@ -4,11 +4,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P 节点（安卓兼容 + 聊天/传文件/可复制日志）</title>
+  <title>P2P 节点（安卓兼容 + 聊天/传文件/详细日志/容错）</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#fafafa;color:#333;padding:16px}
-    .wrap{max-width:760px;margin:0 auto;background:#fff;border:1px solid #eee;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.06);padding:16px}
+    .wrap{max-width:780px;margin:0 auto;background:#fff;border:1px solid #eee;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.06);padding:16px}
     h1{font-size:20px;margin-bottom:8px}
     .status{display:inline-block;padding:6px 10px;border-radius:20px;font-size:12px;margin:6px 0}
     .offline{background:#fee;color:#b30000}
@@ -37,12 +37,12 @@
     .logbox{margin-top:10px}
     .log-actions{display:flex;gap:8px;margin-bottom:6px}
     .log-actions button{padding:8px 10px;border:1px solid #ddd;background:#fff;border-radius:8px}
-    pre{background:#111;color:#0f0;border-radius:8px;padding:10px;height:170px;overflow:auto;margin:0;font-family:monospace;font-size:12px;white-space:pre-wrap}
+    pre{background:#111;color:#0f0;border-radius:8px;padding:10px;height:220px;overflow:auto;margin:0;font-family:monospace;font-size:12px;white-space:pre-wrap}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>🚀 P2P 节点（安卓兼容版）</h1>
+    <h1>🚀 P2P 节点（安卓兼容 · 详细日志 · 更稳）</h1>
     <span id="status" class="status offline">● 离线</span>
 
     <div class="row">
@@ -63,34 +63,4 @@
         <button onclick="app.copyLink()">复制链接</button>
       </div>
       <div id="qr"></div>
-    </div>
-
-    <div id="tools" class="tools">
-      <div class="tool-row">
-        <input id="fileInput" type="file" multiple>
-        <button onclick="app.sendFiles()">发送文件</button>
-      </div>
-    </div>
-
-    <div id="chat" class="chat">
-      <div id="msgs" class="chat-msgs"></div>
-      <div class="chat-input">
-        <input id="msgInput" placeholder="输入消息后回车或点发送" onkeypress="if(event.keyCode===13)app.sendMsg()">
-        <button onclick="app.sendMsg()">发送</button>
-      </div>
-    </div>
-
-    <div class="logbox">
-      <div class="log-actions">
-        <button onclick="app.copyLog()">复制日志</button>
-        <button onclick="app.clearLog()">清空日志</button>
-      </div>
-      <pre id="log">> 初始化中...</pre>
-    </div>
-  </div>
-
-  <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
-  <script src="easytier.js"></script>
-</body>
-</html>
+      <div style="font-size:12px;color:#8a6d3b;margin-top:6px;">
