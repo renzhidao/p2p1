@@ -119,8 +119,7 @@
       copyShare.addEventListener('click', ()=> window.app && app.copyLink());
       copyLogBtn.addEventListener('click', ()=> window.app && app.copyLog());   // 复制“全量日志”
       clearLogBtn.addEventListener('click', ()=> window.app && app.clearLog());
-      // 一键视频：无需打开 UI；多人弹序号选择
-      callBtn.addEventListener('click', ()=> window.app && app.quickCall());
+      callBtn.addEventListener('click', ()=> window.app && app.quickCall());    // 入口页直拨
 
       window.updateEntryStatus = function(state){
         $('#statusChip').textContent = '状态：' + (state.connected ? '在线' : '离线');
@@ -145,3 +144,5 @@
   </script>
 </body>
 </html>
+
+

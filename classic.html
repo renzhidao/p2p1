@@ -151,8 +151,8 @@
     <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.0/dist/peerjs.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/davidshimjs-qrcodejs@0.0.2/qrcode.min.js"></script>
     <script>
+      // 仅标记 classic UI（去掉早判定的 __USE_OPENER_APP__，避免竞态）
       window.__CLASSIC_UI__ = true;
-      window.__USE_OPENER_APP__ = !!(window.opener && window.opener.app);
     </script>
     <script src="easytier.js"></script>
   </body>

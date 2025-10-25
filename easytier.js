@@ -1,4 +1,3 @@
-
 (function(){
   var injectedServer  = (typeof window.__FIXED_SERVER__  === 'object' && window.__FIXED_SERVER__)  || null;
   var injectedNetwork = (typeof window.__FIXED_NETWORK__ === 'string' && window.__FIXED_NETWORK__) || null;
@@ -116,7 +115,7 @@
     self.localId=''; self.virtualIp='';
     self.timers={up:null,ping:null};
 
-    // 日志：精简显示 + 全量复制
+    // 精简显示 + 全量复制
     self.logBuf='> 初始化：准备连接';
     self.logFullBuf=self.logBuf;
 
@@ -151,6 +150,7 @@
       }
     }
     self.log = log;
+
     self.copyLog=function(){
       try{
         var txt=self.logFullBuf||'';
@@ -214,7 +214,7 @@
     function fileLink(ui,url,name,size){ if(self._classic && typeof self._classic.showFileLink==='function') self._classic.showFileLink(ui,url,name,size); }
     function updProg(ui,p){ if(self._classic && typeof self._classic.updateProgress==='function') self._classic.updateProgress(ui,p); }
 
-    // 文本发送：兼容 classic editor；activePeer=all 时群发
+    // 支持 classic 的 editor；群发/单聊
     self.sendMsg=function(){
       var val='';
       if (self._classic && typeof self._classic.getEditorText==='function') val=self._classic.getEditorText();
@@ -458,7 +458,7 @@
           else if(d.type==='pong'){
             var lat=Date.now()-(d.ts||Date.now());
             self.conns[pid].latency=lat;
-            self.log('延迟：'+lat+'ms'); // 会写入全量日志；精简日志不显示
+            self.log('延迟：'+lat+'ms');
             self.updateInfo();
           }
           else if(d.type==='chat'){
@@ -621,7 +621,7 @@
       self.log('已断开');
     };
 
-    // 新增：入口页一键视频通话（无需打开 UI）
+    // 入口页一键视频
     self.quickCall=function(){
       if (!self.peer || !self.isConnected){ alert('未连接'); return; }
       var open = Object.keys(self.conns).filter(function(k){ return self.conns[k] && self.conns[k].open; });
@@ -850,12 +850,22 @@
     app._classic.updateStatus();
   }
 
-  // 保持原有架构：classic 页面按开关复用 opener 的 app
-  if (window.__CLASSIC_UI__ && window.__USE_OPENER_APP__ && window.opener && window.opener.app){
-    window.app = window.opener.app;
-    bindClassicUI(window.app);
-  }else{
+  // 关键修复：classic 页面复用 opener.app（含最多 1 秒重试，杜绝时序竞态）
+  if (window.__CLASSIC_UI__ && window.opener) {
+    (function tryReuse(i){
+      if (window.opener.app) {
+        window.app = window.opener.app;
+        bindClassicUI(window.app);
+      } else if (i < 10) {
+        setTimeout(function(){ tryReuse(i+1); }, 100);
+      } else {
+        window.app = app;
+        bindClassicUI(app);
+      }
+    })(0);
+  } else {
     window.app = app;
     if (window.__CLASSIC_UI__) bindClassicUI(app);
   }
 })();
+
