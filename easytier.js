@@ -8,7 +8,7 @@
     {urls:'stun:global.stun.twilio.com:3478'}
   ];
   var CHUNK = 512*1024;
-  var PREVIEW_PCT = 3;
+  var PREVIEW_PCT = 1;               // 1% 即可预览
   var HIGH_WATER  = 1.5*1024*1024;
   var LOW_WATER   = 0.6*1024*1024;
 
@@ -37,19 +37,10 @@
   }
   function fileHashMeta(file){ return sha256(file.name+'|'+file.size); }
 
-  // 文件类型兜底：mime 为空时按扩展名识别
-  function ext(name){
-    var m=String(name||'').match(/\.([a-z0-9]+)$/i);
-    return m? m[1].toLowerCase() : '';
-  }
-  function isVideo(mime,name){
-    if((mime||'').indexOf('video/')===0) return true;
-    return ['mp4','webm','mkv','mov','m4v','avi','ts','3gp','flv','wmv'].indexOf(ext(name))!==-1;
-  }
-  function isImage(mime,name){
-    if((mime||'').indexOf('image/')===0) return true;
-    return ['jpg','jpeg','png','gif','webp','bmp','heic','heif','avif','svg'].indexOf(ext(name))!==-1;
-  }
+  // 类型兜底：mime 为空时按扩展名识别
+  function ext(name){ var m=String(name||'').match(/\.([a-z0-9]+)$/i); return m?m[1].toLowerCase():''; }
+  function isVid(mime,name){ return (mime||'').indexOf('video/')===0 || ['mp4','webm','mkv','mov','m4v','avi','ts','3gp','flv','wmv'].indexOf(ext(name))!==-1; }
+  function isImg(mime,name){ return (mime||'').indexOf('image/')===0 || ['jpg','jpeg','png','gif','webp','bmp','heic','heif','avif','svg'].indexOf(ext(name))!==-1; }
 
   // IndexedDB
   var idb, idbReady=false;
@@ -67,45 +58,32 @@
   })();
   function idbPutFull(hash, blob, meta){
     if(!idbReady || !hash) return;
-    try{
-      var tx=idb.transaction('files','readwrite');
-      tx.objectStore('files').put({hash:hash, blob:blob, meta:meta, ts:Date.now()});
-    }catch(e){}
+    try{ var tx=idb.transaction('files','readwrite'); tx.objectStore('files').put({hash:hash, blob:blob, meta:meta, ts:Date.now()}); }catch(e){}
   }
   function idbGetFull(hash, cb){
     if(!idbReady) return cb(null);
     try{
-      var tx=idb.transaction('files','readonly');
-      var rq=tx.objectStore('files').get(hash);
-      rq.onsuccess=function(){ cb(rq.result||null); };
-      rq.onerror=function(){ cb(null); };
+      var tx=idb.transaction('files','readonly'); var rq=tx.objectStore('files').get(hash);
+      rq.onsuccess=function(){ cb(rq.result||null); }; rq.onerror=function(){ cb(null); };
     }catch(e){ cb(null); }
   }
   function idbPutPart(hash, meta){
     if(!idbReady || !hash) return;
-    try{
-      var tx=idb.transaction('parts','readwrite');
-      tx.objectStore('parts').put({hash:hash, meta:meta, ts:Date.now()});
-    }catch(e){}
+    try{ var tx=idb.transaction('parts','readwrite'); tx.objectStore('parts').put({hash:hash, meta:meta, ts:Date.now()}); }catch(e){}
   }
   function idbGetPart(hash, cb){
     if(!idbReady) return cb(null);
     try{
-      var tx=idb.transaction('parts','readonly');
-      var rq=tx.objectStore('parts').get(hash);
-      rq.onsuccess=function(){ cb(rq.result||null); };
-      rq.onerror=function(){ cb(null); };
+      var tx=idb.transaction('parts','readonly'); var rq=tx.objectStore('parts').get(hash);
+      rq.onsuccess=function(){ cb(rq.result||null); }; rq.onerror=function(){ cb(null); };
     }catch(e){ cb(null); }
   }
   function idbDelPart(hash){
     if(!idbReady || !hash) return;
-    try{
-      var tx=idb.transaction('parts','readwrite');
-      tx.objectStore('parts').delete(hash);
-    }catch(e){}
+    try{ var tx=idb.transaction('parts','readwrite'); tx.objectStore('parts').delete(hash); }catch(e){}
   }
 
-  // 视频缩略图
+  // 缩略图
   function extractVideoThumbnail(file, cb){
     var video=document.createElement('video');
     video.preload='metadata'; video.muted=true; video.playsInline=true;
@@ -185,9 +163,8 @@
         if(navigator.clipboard&&navigator.clipboard.writeText){
           navigator.clipboard.writeText(txt).then(function(){ alert('已复制全部日志'); });
         }else{
-          var ta=document.createElement('textarea'); ta.value=txt;
-          document.body.appendChild(ta); ta.select(); document.execCommand('copy');
-          document.body.removeChild(ta); alert('已复制全部日志');
+          var ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta);
+          ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('已复制全部日志');
         }
       }catch(e){ alert('复制失败：'+e.message); }
     };
@@ -243,7 +220,7 @@
     function fileLink(ui,url,name,size){ if(self._classic && typeof self._classic.showFileLink==='function') self._classic.showFileLink(ui,url,name,size); }
     function updProg(ui,p){ if(self._classic && typeof self._classic.updateProgress==='function') self._classic.updateProgress(ui,p); }
 
-    // 跨窗口安全创建 Blob URL：优先在当前页创建
+    // 在当前页面创建 URL（避免跨窗作用域问题）
     function mkUrl(blob){
       if(self._classic && typeof self._classic.mkUrl === 'function') return self._classic.mkUrl(blob);
       return URL.createObjectURL(blob);
@@ -291,8 +268,8 @@
       files.forEach(function(file){
         var ui = placeholder(file.name, file.size, true);
         var localUrl = mkUrl(file);
-        if (isImage(file.type, file.name)) showImg(ui, localUrl);
-        else if (isVideo(file.type, file.name)){
+        if (isImg(file.type, file.name)) showImg(ui, localUrl);
+        else if (isVid(file.type, file.name)){
           extractVideoThumbnail(file, function(p){ if (ui) ui.poster=p; showVid(ui, localUrl, '已发送'); });
         } else { fileLink(ui, localUrl, file.name, file.size); }
 
@@ -338,7 +315,7 @@
           state={off:0},
           lastTs=0, lastPct=-1;
 
-      var posterP = isVideo(file.type, file.name) ? new Promise(function(r){ extractVideoThumbnail(file,r); }) : Promise.resolve(null);
+      var posterP = isVid(file.type, file.name) ? new Promise(function(r){ extractVideoThumbnail(file,r); }) : Promise.resolve(null);
 
       posterP.then(function(poster){
         try{
@@ -363,11 +340,7 @@
               delete st._curSend[id];
 
               try{
-                idbPutFull(hash||'', file, {
-                  name:file.name,
-                  size:file.size,
-                  mime:file.type||'application/octet-stream'
-                });
+                idbPutFull(hash||'', file, {name:file.name,size:file.size,mime:file.type||'application/octet-stream'});
                 self.fullSources[hash||'']=self.fullSources[hash||'']||new Set();
                 self.fullSources[hash||''].add(self.localId);
               }catch(e){}
@@ -410,12 +383,6 @@
         self.updateInfo();
         self.showShare();
         self.log('已连接，ID='+id);
-
-        if (navigator.storage && navigator.storage.persist){
-          navigator.storage.persist().then(function(granted){
-            self.log('PERSISTENCE: '+(granted?'granted':'not granted'));
-          }).catch(function(){});
-        }
 
         var toDial=getPeerParam();
         if(toDial){ self.log('准备连接对端：'+toDial); setTimeout(function(){ connectPeer(toDial); },400); }
@@ -524,23 +491,19 @@
             var h=d.hash||'';
             var ui=placeholder(d.name||'文件', d.size||0, false);
 
-            var mime = d.mime || '';
-            if (!isVideo(mime, d.name) && !isImage(mime, d.name) && (!mime || mime==='application/octet-stream')) {
-              if (isVideo('', d.name)) mime = 'video/unknown';
-              else if (isImage('', d.name)) mime = 'image/unknown';
-            }
+            // A 风格：先放封面（若有）
+            if (isVid(d.mime, d.name) && d.poster){ ui.poster = d.poster; showVid(ui,'#','等待数据…'); }
 
-            if (isVideo(mime, d.name) && d.poster){ ui.poster = d.poster; showVid(ui,'#','等待数据…'); }
-
+            // 命中全量缓存：直接秒显 + 回 ACK
             if(h){
               idbGetFull(h, function(rec){
                 if(rec && rec.blob){
                   var url=mkUrl(rec.blob);
-                  var recMime = rec.meta && rec.meta.mime || '';
-                  var recName = rec.meta && rec.meta.name || d.name || '文件';
-                  if (isImage(recMime, recName)) showImg(ui,url);
-                  else if (isVideo(recMime, recName)) showVid(ui,url,'本地缓存');
-                  else fileLink(ui,url, recName, (rec.meta && rec.meta.size)||d.size||0);
+                  var m = (rec.meta && rec.meta.mime) || '';
+                  var n = (rec.meta && rec.meta.name) || d.name || '文件';
+                  if (isImg(m,n)) showImg(ui,url);
+                  else if (isVid(m,n)) showVid(ui,url,'本地缓存');
+                  else fileLink(ui,url,n,(rec.meta&&rec.meta.size)||d.size||0);
                   try{ c.send({type:'file-end',id:d.id,hash:h}); }catch(e){}
                   return;
                 }
@@ -552,8 +515,9 @@
               });
             }
 
+            // 建立接收上下文
             self.conns[pid].recv.cur={
-              id:d.id, name:d.name, size:d.size||0, mime:mime||'application/octet-stream',
+              id:d.id, name:d.name, size:d.size||0, mime:d.mime||'application/octet-stream',
               got:0, parts:[], previewed:false, previewUrl:null, videoState:null, hash:h
             };
             self.conns[pid].recv.ui=ui;
@@ -563,10 +527,7 @@
           }
           else if(d.type==='file-has'){
             var h2=d.hash;
-            if(h2){
-              self.fullSources[h2]=self.fullSources[h2]||new Set();
-              self.fullSources[h2].add(pid);
-            }
+            if(h2){ self.fullSources[h2]=self.fullSources[h2]||new Set(); self.fullSources[h2].add(pid); }
           }
           else if(d.type==='file-resume'){
             var st=self.conns[pid];
@@ -577,6 +538,7 @@
           return;
         }
 
+        // A 风格：接收二进制
         var st=self.conns[pid],
             ctx=st&&st.recv&&st.recv.cur,
             ui=st&&st.recv&&st.recv.ui;
@@ -589,20 +551,22 @@
         var pct=ctx.size?Math.min(100,Math.floor(ctx.got*100/ctx.size)):0;
         updProg(ui,pct);
 
-        if(ctx.hash && ctx.got>0 && (ctx.got % (2*1024*1024) < sz)){
-          try{ idbPutPart(ctx.hash,{name:ctx.name,size:ctx.size,mime:ctx.mime, got:ctx.got}); }catch(e){}
-        }
-
+        // 到阈值即预览：图片即显，视频阈值即显
         if(!ctx.previewed){
           try{
             var url=mkUrl(new Blob(ctx.parts,{type:ctx.mime}));
-            if (isImage(ctx.mime, ctx.name)){
+            if (isImg(ctx.mime, ctx.name)){
               showImg(ui,url); ctx.previewed=true; ctx.previewUrl=url;
-            }else if (isVideo(ctx.mime, ctx.name)){
+            } else if (isVid(ctx.mime, ctx.name)){
               var need=Math.max(1,Math.floor(ctx.size*self.previewPct/100));
               if(ctx.got>=need){ showVid(ui,url,'可预览（接收中 '+pct+'%）'); ctx.previewed=true; ctx.previewUrl=url; }
             }
           }catch(e){}
+        }
+
+        // 断点轻量记录
+        if(ctx.hash && ctx.got>0 && (ctx.got % (2*1024*1024) < sz)){
+          try{ idbPutPart(ctx.hash,{name:ctx.name,size:ctx.size,mime:ctx.mime, got:ctx.got}); }catch(e){}
         }
       });
 
@@ -626,8 +590,8 @@
       var blob=new Blob(ctx.parts,{type:ctx.mime});
       var url=mkUrl(blob);
 
-      if (isImage(ctx.mime, ctx.name)) showImg(ui,url);
-      else if (isVideo(ctx.mime, ctx.name)) showVid(ui,url,'接收完成');
+      if (isImg(ctx.mime, ctx.name)) showImg(ui,url);
+      else if (isVid(ctx.mime, ctx.name)) showVid(ui,url,'接收完成');
       else fileLink(ui,url,ctx.name,ctx.size);
 
       try{
@@ -642,8 +606,7 @@
 
       st.recv.cur=null; st.recv.ui=null;
       self.log('已接收文件：'+ctx.name+' '+human(ctx.size));
-      var msgScroll=document.getElementById('msgScroll');
-      if(msgScroll){ msgScroll.scrollTop=msgScroll.scrollHeight; }
+      var msgScroll=document.getElementById('msgScroll'); if(msgScroll){ msgScroll.scrollTop=msgScroll.scrollHeight; }
     }
 
     function startTimers(){
@@ -755,7 +718,6 @@
       var hasText = textOfEditor().length>0;
       sendBtn.disabled = !(app && app.isConnected && hasText);
     }
-
     function fixAllLabel(){
       try{
         var rows = contactList.querySelectorAll('.contact');
@@ -913,19 +875,20 @@
     app._classic.updateStatus();
   }
 
-if (window.CLASSIC_UI && window.opener) {
-  (function waitOpener(){
-    try{
-      if (window.opener && window.opener.app) {
-        window.app = window.opener.app;
-        bindClassicUI(window.app);
-        return;
-      }
-    }catch(e){}
-    setTimeout(waitOpener, 200);
-  })();
-} else {
-  window.app = app;
-  if (window.CLASSIC_UI) bindClassicUI(app);
-}
+  // 复用 opener.app：持续等待，绝不回退到本地空实例
+  if (window.CLASSIC_UI && window.opener) {
+    (function waitOpener(){
+      try{
+        if (window.opener && window.opener.app) {
+          window.app = window.opener.app;
+          bindClassicUI(window.app);
+          return;
+        }
+      }catch(e){}
+      setTimeout(waitOpener, 200);
+    })();
+  } else {
+    window.app = app;
+    if (window.CLASSIC_UI) bindClassicUI(app);
+  }
 })();
