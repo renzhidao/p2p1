@@ -1,3 +1,4 @@
+
 (function(){
   var injectedServer  = (typeof window.__FIXED_SERVER__  === 'object' && window.__FIXED_SERVER__)  || null;
   var injectedNetwork = (typeof window.__FIXED_NETWORK__ === 'string' && window.__FIXED_NETWORK__) || null;
@@ -114,17 +115,28 @@
     self.peer=null; self.conns={}; self.isConnected=false; self.startAt=0;
     self.localId=''; self.virtualIp='';
     self.timers={up:null,ping:null};
+
+    // 日志：精简显示 + 全量复制
     self.logBuf='> 初始化：准备连接';
+    self.logFullBuf=self.logBuf;
 
     self.fullSources={};
     self.displayNames={};
     self.activePeer='all';
     self.myName = (localStorage.getItem('nickname')||'').trim() || '';
 
+    function isImportant(s){
+      var t=String(s||'');
+      return /已连接|断开|错误|拨号|入站|消息|文件|开始连接|连接超时|连接已关闭|发送|接收|通话/.test(t);
+    }
     function log(s){
-      self.logBuf += "\n["+now()+"] "+s;
-      var el=document.getElementById('log');
-      if(el){ el.textContent=self.logBuf; el.scrollTop=el.scrollHeight; }
+      var line="["+now()+"] "+s;
+      self.logFullBuf += "\n"+line;
+      if (isImportant(s)){
+        self.logBuf += "\n"+line;
+        var el=document.getElementById('log');
+        if(el){ el.textContent=self.logBuf; el.scrollTop=el.scrollHeight; }
+      }
       if (typeof window.updateEntryStatus === 'function'){
         var up='00:00:00';
         if(self.isConnected && self.startAt){
@@ -141,15 +153,16 @@
     self.log = log;
     self.copyLog=function(){
       try{
+        var txt=self.logFullBuf||'';
         if(navigator.clipboard&&navigator.clipboard.writeText){
-          navigator.clipboard.writeText(self.logBuf).then(function(){ alert('日志已复制'); });
+          navigator.clipboard.writeText(txt).then(function(){ alert('已复制全部日志'); });
         }else{
-          var ta=document.createElement('textarea'); ta.value=self.logBuf; document.body.appendChild(ta);
-          ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('日志已复制');
+          var ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta);
+          ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('已复制全部日志');
         }
       }catch(e){ alert('复制失败：'+e.message); }
     };
-    self.clearLog=function(){ self.logBuf=''; var el=document.getElementById('log'); if(el) el.textContent=''; };
+    self.clearLog=function(){ self.logBuf=''; self.logFullBuf=''; var el=document.getElementById('log'); if(el) el.textContent=''; };
 
     function setStatus(txt){
       var st=document.getElementById('statusChip');
@@ -201,11 +214,12 @@
     function fileLink(ui,url,name,size){ if(self._classic && typeof self._classic.showFileLink==='function') self._classic.showFileLink(ui,url,name,size); }
     function updProg(ui,p){ if(self._classic && typeof self._classic.updateProgress==='function') self._classic.updateProgress(ui,p); }
 
+    // 文本发送：兼容 classic editor；activePeer=all 时群发
     self.sendMsg=function(){
       var val='';
       if (self._classic && typeof self._classic.getEditorText==='function') val=self._classic.getEditorText();
       val = (val||'').trim();
-      if (!val){ return; }
+      if (!val){ self.log('T14 OUT_ERROR: empty message'); return; }
 
       pushChat(val, true);
       if (self._classic && typeof self._classic.clearEditor==='function') self._classic.clearEditor();
@@ -216,13 +230,13 @@
       }else{
         if (self.conns[self.activePeer] && self.conns[self.activePeer].open) targets=[self.activePeer];
       }
-      if (!targets.length){ self.log('无在线对象，消息未发送'); return; }
+      if (!targets.length){ self.log('T14 OUT_ERROR: no open peers to send'); return; }
 
       targets.forEach(function(pid){
         try{ self.conns[pid].conn.send({type:'chat', text:val}); }
-        catch(e){ self.log('消息发送失败：'+(e.message||e)); }
+        catch(e){ self.log('T14 OUT_ERROR: chat send '+(e.message||e)); }
       });
-      self.log('已发送消息：'+ (val.length>30? (val.slice(0,30)+'…') : val));
+      self.log('T40 CHAT_SENT: '+ (val.length>30? (val.slice(0,30)+'…') : val) +' -> '+targets.length);
     };
 
     self.sendFiles=function(){
@@ -237,7 +251,7 @@
       } else {
         if (self.conns[self.activePeer] && self.conns[self.activePeer].open) targets=[self.activePeer];
       }
-      if(!targets.length){ self.log('无在线对象，无法发送文件'); alert('没有在线节点，无法发送文件'); return; }
+      if(!targets.length){ self.log('T40 FILE_SEND_BEGIN: no peers open'); alert('没有在线节点，无法发送文件'); return; }
 
       files.forEach(function(file){
         var ui = placeholder(file.name, file.size, true);
@@ -408,7 +422,6 @@
         self.conns[pid].open=true;
         self.updateInfo();
         try{
-          // 关键：发送 hello（携带昵称和网络信息）
           c.send({
             type:'hello',
             id:self.localId,
@@ -418,7 +431,6 @@
             fullList:Object.keys(self.fullSources)
           });
         }catch(e){}
-        // UI 打开较晚时，立即刷新联系人列表
         if(self._classic && self._classic.renderContacts){
           var arr=[]; for(var k in self.conns){ if(self.conns[k].open) arr.push({id:k,name:self.displayNames[k]||('节点 '+shortId(k))}); }
           self._classic.renderContacts(arr, self.activePeer);
@@ -446,7 +458,7 @@
           else if(d.type==='pong'){
             var lat=Date.now()-(d.ts||Date.now());
             self.conns[pid].latency=lat;
-            self.log('延迟：'+lat+'ms');
+            self.log('延迟：'+lat+'ms'); // 会写入全量日志；精简日志不显示
             self.updateInfo();
           }
           else if(d.type==='chat'){
@@ -582,7 +594,7 @@
             sec=s%60;
         var t=(h<10?'0':'')+h+':'+(m<10?'0':'')+m+':'+(sec<10?'0':'')+sec;
         var up=document.getElementById('uptime'); if(up) up.textContent=t;
-        if (typeof window.updateEntryStatus==='function'){
+        if (typeof window.updateEntryStatus === 'function'){
           window.updateEntryStatus({connected:true, online:Object.keys(self.conns).filter(k=>self.conns[k].open).length, localId:self.localId, virtualIp:self.virtualIp, uptime:t});
         }
       },1000);
@@ -609,6 +621,25 @@
       self.log('已断开');
     };
 
+    // 新增：入口页一键视频通话（无需打开 UI）
+    self.quickCall=function(){
+      if (!self.peer || !self.isConnected){ alert('未连接'); return; }
+      var open = Object.keys(self.conns).filter(function(k){ return self.conns[k] && self.conns[k].open; });
+      if (!open.length){ alert('没有在线对象'); return; }
+      var pid = (self.activePeer && self.activePeer!=='all' && self.conns[self.activePeer] && self.conns[self.activePeer].open)
+                ? self.activePeer
+                : (open.length===1 ? open[0] : null);
+      if (!pid && open.length>1){
+        var names = open.map(function(k,i){ return (i+1)+'. '+(self.displayNames[k]||('节点 '+k.slice(0,8))); }).join('\n');
+        var ans = prompt('选择视频通话对象：输入序号\n'+names, '1');
+        var idx = parseInt(ans||'',10);
+        if (idx>=1 && idx<=open.length) pid = open[idx-1];
+      }
+      if (!pid){ return; }
+      self.activePeer = pid;
+      self.toggleCall(false);
+    };
+
     self.toggleCall=function(forceClose){
       if (!window.__ENTRY_PAGE__) return;
       self._media = self._media || {};
@@ -621,7 +652,7 @@
         return;
       }
       var pid=self.activePeer;
-      if(!pid || pid==='all'){ alert('请先在聊天 UI 里选择一个联系人'); return; }
+      if(!pid || pid==='all'){ alert('请先选择通话对象'); return; }
       if(!self.peer){ alert('未连接'); return; }
       navigator.mediaDevices.getUserMedia({video:true,audio:true}).then(function(stream){
         self._media.local=stream;
@@ -805,7 +836,6 @@
       app._classic.renderContacts(arr, app.activePeer);
     }); }
 
-    // 初次渲染联系人（UI 在已有连接后打开也能看到列表）
     (function initialRender(){
       if (!contactList || !app || !app._classic || !app._classic.renderContacts) return;
       var arr = [];
@@ -820,6 +850,7 @@
     app._classic.updateStatus();
   }
 
+  // 保持原有架构：classic 页面按开关复用 opener 的 app
   if (window.__CLASSIC_UI__ && window.__USE_OPENER_APP__ && window.opener && window.opener.app){
     window.app = window.opener.app;
     bindClassicUI(window.app);

@@ -60,7 +60,7 @@
       </div>
 
       <div class="row" style="margin-top:14px">
-        <button id="callBtn" class="btn secondary" disabled>🎥 发起/结束视频通话（当前单聊）</button>
+        <button id="callBtn" class="btn secondary" disabled>🎥 发起视频通话（当前单聊）</button>
       </div>
       <div class="vid">
         <div>
@@ -117,9 +117,10 @@
       });
       openUI.addEventListener('click', ()=> window.open('classic.html','_blank'));
       copyShare.addEventListener('click', ()=> window.app && app.copyLink());
-      copyLogBtn.addEventListener('click', ()=> window.app && app.copyLog());
+      copyLogBtn.addEventListener('click', ()=> window.app && app.copyLog());   // 复制“全量日志”
       clearLogBtn.addEventListener('click', ()=> window.app && app.clearLog());
-      callBtn.addEventListener('click', ()=> window.app && app.toggleCall());
+      // 一键视频：无需打开 UI；多人弹序号选择
+      callBtn.addEventListener('click', ()=> window.app && app.quickCall());
 
       window.updateEntryStatus = function(state){
         $('#statusChip').textContent = '状态：' + (state.connected ? '在线' : '离线');
