@@ -156,36 +156,3 @@
     <script src="easytier.js"></script>
   </body>
 </html>
-
-二、easytier.js（只替换文件末尾“实例复用”那段）
-- 用“实时检查 + 最多 1 秒重试”的方式复用入口页的 window.opener.app。这样 100% 不会新建孤立实例，聊天就能发。
-
-把你文件最底部原来的这一段：
-if (window.__CLASSIC_UI__ && window.__USE_OPENER_APP__ && window.opener && window.opener.app){
-  window.app = window.opener.app;
-  bindClassicUI(window.app);
-} else {
-  window.app = app;
-  if (window.__CLASSIC_UI__) bindClassicUI(app);
-}
-
-替换为下面这段：
-(function exposeApp(){
-  // 优先复用入口页实例；最多重试 1 秒，杜绝竞态
-  if (window.__CLASSIC_UI__ && window.opener) {
-    (function tryReuse(i){
-      if (window.opener && window.opener.app) {
-        window.app = window.opener.app;
-        bindClassicUI(window.app);
-      } else if (i < 10) {
-        setTimeout(function(){ tryReuse(i+1); }, 100);
-      } else {
-        window.app = app;
-        bindClassicUI(app);
-      }
-    })(0);
-  } else {
-    window.app = app;
-    if (window.__CLASSIC_UI__) bindClassicUI(app);
-  }
-})();
