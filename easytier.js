@@ -913,20 +913,19 @@
     app._classic.updateStatus();
   }
 
-  if (window.CLASSIC_UI && window.opener) {
-    (function tryReuse(i){
-      if (window.opener.app) {
+if (window.CLASSIC_UI && window.opener) {
+  (function waitOpener(){
+    try{
+      if (window.opener && window.opener.app) {
         window.app = window.opener.app;
         bindClassicUI(window.app);
-      } else if (i < 10) {
-        setTimeout(function(){ tryReuse(i+1); }, 100);
-      } else {
-        window.app = app;
-        bindClassicUI(app);
+        return;
       }
-    })(0);
-  } else {
-    window.app = app;
-    if (window.CLASSIC_UI) bindClassicUI(app);
-  }
+    }catch(e){}
+    setTimeout(waitOpener, 200);
+  })();
+} else {
+  window.app = app;
+  if (window.CLASSIC_UI) bindClassicUI(app);
+}
 })();
