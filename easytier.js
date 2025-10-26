@@ -1,144 +1,247 @@
-/*
- * ====================================================================================
- * Final Merged Version - Fixed by AI Assistant
- *
- * 核心修复点:
- * 1. [关键] 移除了发送视频时对封面提取的阻塞等待。现在文件元信息会立即发送，确保传输总能开始，
- *    就像稳定的A版本一样。封面提取变为一个不影响主流程的异步操作。
- * 2. [UI优化] 修复了发送文件时，发送方自己界面上错误地显示“准备接收…”的问题，
- *    改为更合理的“准备发送…”。
- *
- * 本版本融合了B版本的新功能（如断点续传、联系人列表、视频通话）和A版本稳定可靠的文件传输逻辑。
- * ====================================================================================
- */
 (function(){
-  var injectedServer  = (typeof window.__FIXED_SERVER__  === 'object' && window.__FIXED_SERVER__)  || null;
-  var injectedNetwork = (typeof window.__FIXED_NETWORK__ === 'string' && window.__FIXED_NETWORK__) || null;
+  'use strict';
 
-  var ICE = [
-    {urls:'stun:stun.l.google.com:19302'},
-    {urls:'stun:stun1.l.google.com:19302'},
-    {urls:'stun:global.stun.twilio.com:3478'}
-  ];
-  var CHUNK = 512*1024;
-  var PREVIEW_PCT = 1;               // 1% 即可预览（秒出）
-  var HIGH_WATER  = 1.5*1024*1024;
-  var LOW_WATER   = 0.6*1024*1024;
+  // -------------------- 配置注入与常量 --------------------
+  var injectedServer  = (typeof window !== 'undefined' && ((window.FIXED_SERVER && typeof window.FIXED_SERVER === 'object' && window.FIXED_SERVER) || (window.__FIXED_SERVER__ && typeof window.__FIXED_SERVER__ === 'object' && window.__FIXED_SERVER__))) || null;
+  var injectedNetwork = (typeof window !== 'undefined' && (typeof window.FIXED_NETWORK === 'string' && window.FIXED_NETWORK || typeof window.__FIXED_NETWORK__ === 'string' && window.__FIXED_NETWORK__)) || null;
 
+  var ICE = (function(){
+    var base = [
+      {urls:'stun:stun.l.google.com:19302'},
+      {urls:'stun:stun1.l.google.com:19302'},
+      {urls:'stun:global.stun.twilio.com:3478'}
+    ];
+    var override = (typeof window !== 'undefined') && ((window.ICE_OVERRIDE && Array.isArray(window.ICE_OVERRIDE) && window.ICE_OVERRIDE) || (window.__ICE_OVERRIDE__ && Array.isArray(window.__ICE_OVERRIDE__) && window.__ICE_OVERRIDE__));
+    return override || base;
+  })();
+
+  var CHUNK = 512 * 1024;        // 512KB
+  var PREVIEW_PCT = 1;           // 1% 提前预览
+  var HIGH_WATER  = 1.5 * 1024 * 1024; // 1.5MB
+  var LOW_WATER   = 0.6 * 1024 * 1024; // 0.6MB
+  var PART_FLUSH  = 512 * 1024;  // 512KB
+  var CACHE_LIMIT = 300 * 1024 * 1024; // 300MB
+
+  // -------------------- 小工具 --------------------
   function now(){ return new Date().toLocaleTimeString(); }
-  function shortId(id){ return id? id.substr(0,10)+'...':'-'; }
+  function shortId(id){ id=String(id||''); return id ? id.substr(0,10)+'...' : '-'; }
   function human(n){
-    if(n<1024) return n+' B';
-    if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
-    if(n<1024*1024*1024) return (n/1024/1024).toFixed(1)+' MB';
+    if(n < 1024) return n+' B';
+    if(n < 1024*1024) return (n/1024).toFixed(1)+' KB';
+    if(n < 1024*1024*1024) return (n/1024/1024).toFixed(1)+' MB';
     return (n/1024/1024/1024).toFixed(1)+' GB';
   }
+  function ext(name){ var m=String(name||'').match(/\.([a-z0-9]+)$/i); return m? m[1].toLowerCase():''; }
+  function isImg(mime,name){
+    return (String(mime||'').indexOf('image/')===0) || ['jpg','jpeg','png','gif','webp','bmp','heic','heif','avif','svg'].indexOf(ext(name))!==-1;
+  }
+  function isVid(mime,name){
+    return (String(mime||'').indexOf('video/')===0) || ['mp4','webm','mkv','mov','m4v','avi','ts','3gp','flv','wmv'].indexOf(ext(name))!==-1;
+  }
+  function isAudio(mime,name){
+    return (String(mime||'').indexOf('audio/')===0) || ['mp3','wav','ogg','oga','m4a','aac','flac','opus','amr','wma'].indexOf(ext(name))!==-1;
+  }
+  function canPlayVideo(mime,name){
+    try{
+      var v=document.createElement('video');
+      if(!v || !v.canPlayType) return false;
+      var type = String(mime||'');
+      if(!type){
+        var e = ext(name);
+        var map = {mp4:'video/mp4',m4v:'video/mp4',webm:'video/webm',ogv:'video/ogg',mov:'video/quicktime',mkv:'video/x-matroska',ts:'video/mp2t',avi:'video/x-msvideo',wmv:'video/x-ms-wmv','3gp':'video/3gpp'};
+        type = map[e] || '';
+      }
+      if(!type) return false;
+      var res = v.canPlayType(type);
+      return !!res && res !== 'no';
+    }catch(e){ return false; }
+  }
+  function canPlayAudio(mime,name){
+    try{
+      var a=document.createElement('audio');
+      if(!a || !a.canPlayType) return false;
+      var type = String(mime||'');
+      if(!type){
+        var e = ext(name);
+        var map = {mp3:'audio/mpeg',m4a:'audio/mp4',aac:'audio/aac',wav:'audio/wav',ogg:'audio/ogg',oga:'audio/ogg',opus:'audio/opus',flac:'audio/flac',amr:'audio/amr',wma:'audio/x-ms-wma'};
+        type = map[e] || '';
+      }
+      if(!type) return false;
+      var res = a.canPlayType(type);
+      return !!res && res !== 'no';
+    }catch(e){ return false; }
+  }
   function genIp(id){
-    var h=0; for(var i=0;i<id.length;i++){ h=(h*31+id.charCodeAt(i))>>>0; }
+    var h=0; id=String(id||'');
+    for(var i=0;i<id.length;i++){ h=(h*31 + id.charCodeAt(i))>>>0; }
     return '10.144.'+(((h)&0xff)+1)+'.'+(((h>>8)&0xff)+1);
   }
   function getPeerParam(){
     var s=window.location.search; if(!s||s.length<2) return '';
     var m=s.match(/[?&]peer=([^&]+)/); return m? decodeURIComponent(m[1]):'';
   }
-  function sha256(str){
-    var enc=new TextEncoder().encode(str);
-    return crypto.subtle.digest('SHA-256', enc).then(function(buf){
-      var b=new Uint8Array(buf), s=''; for(var i=0;i<b.length;i++){ s+=('0'+b[i].toString(16)).slice(-2); }
+  function sha256Hex(buf){
+    return crypto.subtle.digest('SHA-256', buf).then(function(d){
+      var b=new Uint8Array(d), s=''; for(var i=0;i<b.length;i++){ s+=('0'+b[i].toString(16)).slice(-2); }
       return s;
     });
   }
-  function fileHashMeta(file){ return sha256(file.name+'|'+file.size); }
+  function fileHashMeta(file){
+    var headSize = Math.min(file.size||0, 256*1024);
+    return new Promise(function(resolve){
+      try{
+        var r = new FileReader();
+        r.onload = function(e){
+          try{
+            var head = new Uint8Array(e.target.result||new ArrayBuffer(0));
+            var meta = new TextEncoder().encode([file.name||'', String(file.size||0), String(file.lastModified||0), ''].join('|'));
+            var buf = new Uint8Array(meta.length + head.length);
+            buf.set(meta,0); buf.set(head, meta.length);
+            sha256Hex(buf).then(resolve).catch(function(){ resolve(''); });
+          }catch(er){ resolve(''); }
+        };
+        r.onerror = function(){ resolve(''); };
+        r.readAsArrayBuffer(file.slice(0, headSize));
+      }catch(e){ resolve(''); }
+    });
+  }
 
-  function ext(name){ var m=String(name||'').match(/\.([a-z0-9]+)$/i); return m?m[1].toLowerCase():''; }
-  function isVid(mime,name){ return (mime||'').indexOf('video/')===0 || ['mp4','webm','mkv','mov','m4v','avi','ts','3gp','flv','wmv'].indexOf(ext(name))!==-1; }
-  function isImg(mime,name){ return (mime||'').indexOf('image/')===0 || ['jpg','jpeg','png','gif','webp','bmp','heic','heif','avif','svg'].indexOf(ext(name))!==-1; }
-
+  // -------------------- IndexedDB 缓存 --------------------
   var idb, idbReady=false;
   (function openIDB(){
     try{
-      var req=indexedDB.open('p2p-cache',2);
-      req.onupgradeneeded=function(e){
+      var req = indexedDB.open('p2p-cache', 3);
+      req.onupgradeneeded = function(e){
         var db=e.target.result;
         if(!db.objectStoreNames.contains('files')) db.createObjectStore('files',{keyPath:'hash'});
         if(!db.objectStoreNames.contains('parts')) db.createObjectStore('parts',{keyPath:'hash'});
       };
-      req.onsuccess=function(e){ idb=e.target.result; idbReady=true; };
-      req.onerror=function(){ idbReady=false; };
+      req.onsuccess = function(e){ idb=e.target.result; idbReady=true; };
+      req.onerror = function(){ idbReady=false; };
     }catch(e){ idbReady=false; }
   })();
+
   function idbPutFull(hash, blob, meta){
     if(!idbReady || !hash) return;
-    try{ var tx=idb.transaction('files','readwrite'); tx.objectStore('files').put({hash:hash, blob:blob, meta:meta, ts:Date.now()}); }catch(e){}
+    try{
+      idbCleanupIfNeeded(meta && meta.size || 0);
+      var tx=idb.transaction('files','readwrite');
+      tx.objectStore('files').put({hash:hash, blob:blob, meta:meta, ts:Date.now()});
+    }catch(e){}
   }
   function idbGetFull(hash, cb){
     if(!idbReady) return cb(null);
     try{
-      var tx=idb.transaction('files','readonly'); var rq=tx.objectStore('files').get(hash);
-      rq.onsuccess=function(){ cb(rq.result||null); }; rq.onerror=function(){ cb(null); };
+      var tx=idb.transaction('files','readonly');
+      var rq=tx.objectStore('files').get(hash);
+      rq.onsuccess=function(){ cb(rq.result||null); };
+      rq.onerror=function(){ cb(null); };
     }catch(e){ cb(null); }
   }
   function idbPutPart(hash, meta){
     if(!idbReady || !hash) return;
-    try{ var tx=idb.transaction('parts','readwrite'); tx.objectStore('parts').put({hash:hash, meta:meta, ts:Date.now()}); }catch(e){}
+    try{
+      var tx=idb.transaction('parts','readwrite');
+      tx.objectStore('parts').put({hash:hash, meta:meta, ts:Date.now()});
+    }catch(e){}
   }
   function idbGetPart(hash, cb){
     if(!idbReady) return cb(null);
     try{
-      var tx=idb.transaction('parts','readonly'); var rq=tx.objectStore('parts').get(hash);
-      rq.onsuccess=function(){ cb(rq.result||null); }; rq.onerror=function(){ cb(null); };
+      var tx=idb.transaction('parts','readonly');
+      var rq=tx.objectStore('parts').get(hash);
+      rq.onsuccess=function(){ cb(rq.result||null); };
+      rq.onerror=function(){ cb(null); };
     }catch(e){ cb(null); }
   }
   function idbDelPart(hash){
     if(!idbReady || !hash) return;
-    try{ var tx=idb.transaction('parts','readwrite'); tx.objectStore('parts').delete(hash); }catch(e){}
+    try{
+      var tx=idb.transaction('parts','readwrite');
+      tx.objectStore('parts').delete(hash);
+    }catch(e){}
+  }
+  function idbCleanupIfNeeded(addedSize){
+    if(!idbReady) return;
+    try{
+      var total=0, items=[];
+      var tx=idb.transaction('files','readonly');
+      var st=tx.objectStore('files');
+      var rq=st.openCursor();
+      rq.onsuccess=function(e){
+        var cur=e.target.result;
+        if(cur){
+          var v=cur.value||{};
+          var sz=(v.meta&&v.meta.size)||0;
+          total += sz;
+          items.push({hash:v.hash, ts:v.ts||0, size:sz});
+          cur.continue();
+        }else{
+          total += addedSize||0;
+          if(total > CACHE_LIMIT){
+            items.sort(function(a,b){ return (a.ts||0)-(b.ts||0); });
+            var need=total-CACHE_LIMIT, freed=0, dels=[];
+            for(var i=0;i<items.length && freed<need;i++){ freed+=items[i].size||0; dels.push(items[i].hash); }
+            if(dels.length){
+              var tx2=idb.transaction('files','readwrite'), s2=tx2.objectStore('files');
+              dels.forEach(function(h){ try{s2.delete(h);}catch(e){} });
+            }
+          }
+        }
+      };
+    }catch(e){}
   }
 
-  function extractVideoThumbnail(file, cb){
-    var video=document.createElement('video');
-    video.preload='metadata'; video.muted=true; video.playsInline=true;
-    var url=URL.createObjectURL(file);
-    var cleaned=false, clean=function(){ if(cleaned) return; cleaned=true; try{URL.revokeObjectURL(url);}catch(e){} };
-    video.src=url;
-    video.addEventListener('loadedmetadata', function(){
-      try{ video.currentTime = Math.min(1, (video.duration||1)*0.1); }catch(e){ clean(); cb(null); }
-    }, {once:true});
-    video.addEventListener('seeked', function(){
+  // -------------------- 视频缩略图 --------------------
+  function extractVideoThumbnail(file){
+    return new Promise(function(resolve){
       try{
-        var w=video.videoWidth||320, h=video.videoHeight||180, r=w/h, W=320, H=Math.round(W/r);
-        var c=document.createElement('canvas'); c.width=W; c.height=H;
-        var g=c.getContext('2d'); g.drawImage(video,0,0,W,H);
-        var poster=c.toDataURL('image/jpeg',0.7);
-        clean(); cb(poster);
-      }catch(e){ clean(); cb(null); }
-    }, {once:true});
-    video.addEventListener('error', function(){ clean(); cb(null); }, {once:true});
+        var video=document.createElement('video');
+        video.preload='metadata'; video.muted=true; video.playsInline=true;
+        var url=URL.createObjectURL(file);
+        var cleaned=false; function clean(){ if(cleaned) return; cleaned=true; try{URL.revokeObjectURL(url);}catch(e){} }
+        var timeout = setTimeout(function(){ clean(); resolve(null); }, 4000);
+        video.addEventListener('loadedmetadata', function(){
+          try{ video.currentTime = Math.min(1, (video.duration||1)*0.1); }catch(e){ clearTimeout(timeout); clean(); resolve(null); }
+        }, {once:true});
+        video.addEventListener('seeked', function(){
+          try{
+            clearTimeout(timeout);
+            var w=video.videoWidth||320, h=video.videoHeight||180, r=w/h|| (16/9), W=320, H=Math.round(W/r);
+            var c=document.createElement('canvas'); c.width=W; c.height=H;
+            var g=c.getContext('2d'); g.drawImage(video,0,0,W,H);
+            var poster=c.toDataURL('image/jpeg',0.7);
+            clean(); resolve(poster);
+          }catch(e){ clearTimeout(timeout); clean(); resolve(null); }
+        }, {once:true});
+        video.addEventListener('error', function(){ clearTimeout(timeout); clean(); resolve(null); }, {once:true});
+        video.src=url;
+      }catch(e){ resolve(null); }
+    });
   }
 
+  // -------------------- 应用主体 --------------------
   var app=(function(){
     var self={};
 
     self.server  = injectedServer || {host:'peerjs.92k.de', port:443, secure:true, path:'/'};
     self.network = injectedNetwork || 'public-network';
+    self.iceServers = ICE;
 
     self.chunkSize  = CHUNK;
     self.previewPct = PREVIEW_PCT;
     self.highWater  = HIGH_WATER;
     self.lowWater   = LOW_WATER;
 
-    self.iceServers = ICE;
-
     self.peer=null; self.conns={}; self.isConnected=false; self.startAt=0;
     self.localId=''; self.virtualIp='';
     self.timers={up:null,ping:null};
-
-    self.logBuf='> 初始化：准备连接';
-    self.logFullBuf=self.logBuf;
-
-    self.fullSources={};
-    self.displayNames={};
-    self.activePeer='all';
+    self.logBuf='> 初始化：准备连接'; self.logFullBuf=self.logBuf;
+    self.fullSources={}; self.displayNames={}; self.activePeer='all';
     self.myName = (localStorage.getItem('nickname')||'').trim() || '';
+
+    self.uiRoot = null; // 聊天 UI 根节点（由 bindClassicUI 赋值）
+    self._muted = false;
 
     function isImportant(s){
       var t=String(s||'');
@@ -160,7 +263,7 @@
         }
         window.updateEntryStatus({
           connected:self.isConnected,
-          online:Object.keys(self.conns).filter(k=>self.conns[k].open).length,
+          online:Object.keys(self.conns).filter(function(k){return self.conns[k].open;}).length,
           localId:self.localId, virtualIp:self.virtualIp, uptime:up
         });
       }
@@ -183,7 +286,7 @@
 
     function setStatus(txt){
       var st=document.getElementById('statusChip');
-      if(st) st.textContent = '状态：' + txt;
+      if(st) st.textContent = '已连接'===txt || '在线'===txt ? '已连接' : ('状态：'+txt).replace(/^状态：状态：/,'状态：');
     }
 
     self.updateInfo=function(){
@@ -207,7 +310,9 @@
       if(input) input.value=url;
       if(qr){
         qr.innerHTML='';
-        new QRCode(qr,{text:url,width:256,height:256,correctLevel:QRCode.CorrectLevel.M});
+        if (typeof QRCode !== 'undefined'){
+          new QRCode(qr,{text:url,width:256,height:256,correctLevel:QRCode.CorrectLevel.M});
+        }
       }
       var share=document.getElementById('share'); if(share) share.style.display='block';
     };
@@ -227,14 +332,11 @@
       return self._classic && typeof self._classic.placeholder==='function' ? self._classic.placeholder(name,size,mine) : null;
     }
     function showImg(ui,url){ if(self._classic && typeof self._classic.showImage==='function') self._classic.showImage(ui,url); }
-    function showVid(ui,url,note){ if(self._classic && typeof self._classic.showVideo==='function') self._classic.showVideo(ui,url,note,null); }
+    function showVid(ui,url,note,poster){ if(self._classic && typeof self._classic.showVideo==='function') self._classic.showVideo(ui,url,note,poster); }
+    function showAud(ui,url,note){ if(self._classic && typeof self._classic.showAudio==='function') self._classic.showAudio(ui,url,note); }
     function fileLink(ui,url,name,size){ if(self._classic && typeof self._classic.showFileLink==='function') self._classic.showFileLink(ui,url,name,size); }
     function updProg(ui,p){ if(self._classic && typeof self._classic.updateProgress==='function') self._classic.updateProgress(ui,p); }
-
-    function mkUrl(blob){
-      if(self._classic && typeof self._classic.mkUrl === 'function') return self._classic.mkUrl(blob);
-      return URL.createObjectURL(blob);
-    }
+    function mkUrl(blob){ return (self._classic && typeof self._classic.mkUrl==='function') ? self._classic.mkUrl(blob) : URL.createObjectURL(blob); }
 
     self.sendMsg=function(){
       var val='';
@@ -278,10 +380,19 @@
       files.forEach(function(file){
         var ui = placeholder(file.name, file.size, true);
         var localUrl = mkUrl(file);
-        if (isImg(file.type, file.name)) showImg(ui, localUrl);
-        else if (isVid(file.type, file.name)){
-          extractVideoThumbnail(file, function(p){ if (ui) ui.poster=p; showVid(ui, localUrl, '已发送'); });
-        } else { fileLink(ui, localUrl, file.name, file.size); }
+        var m = file.type||'application/octet-stream';
+        if (isImg(m, file.name)) {
+          showImg(ui, localUrl);
+        }
+        else if (isVid(m, file.name) && canPlayVideo(m, file.name)){
+          showVid(ui, localUrl, '发送中…');
+        }
+        else if (isAudio(m, file.name) && canPlayAudio(m, file.name)){
+          showAud(ui, localUrl, '发送中…');
+        }
+        else {
+          fileLink(ui, localUrl, file.name, file.size);
+        }
 
         fileHashMeta(file).then(function(hash){
           targets.forEach(function(pid){ enqueueFile(pid,file,hash); });
@@ -302,8 +413,8 @@
     }
     function getBuffered(c){
       try{
-        if(c&&c._dc&&typeof c._dc.bufferedAmount==='number') return c._dc.bufferedAmount;
-        if(c&&typeof c.bufferSize==='number') return c.bufferSize;
+        if(c && typeof c.bufferSize==='number') return c.bufferSize;
+        if(c && c._dc && typeof c._dc.bufferedAmount==='number') return c._dc.bufferedAmount;
       }catch(e){}
       return 0;
     }
@@ -316,70 +427,62 @@
       loop();
     }
 
-    // ========================================================================
-    //   FIXED FUNCTION: sendFileTo
-    //   Removed blocking poster promise. Sends file-begin meta immediately.
-    // ========================================================================
     function sendFileTo(pid,file,hash,done){
       var st=self.conns[pid]; if(!st||!st.open){ self.log('对方不在线：'+shortId(pid)); return done&&done(); }
 
       var c=st.conn,
           id=String(Date.now())+'_'+Math.floor(Math.random()*1e6),
           chunk=self.chunkSize,
-          state={off:0};
+          state={off:0},
+          lastTs=0, lastPct=-1;
 
-      // 1. Send `file-begin` immediately without poster. This is the crucial fix.
-      try{
-        c.send({
-          type:'file-begin', id:id, name:file.name, size:file.size, 
-          mime:file.type||'application/octet-stream', chunk:chunk, hash:hash
-        });
-      }catch(e){ 
-        self.log('文件元信息发送失败'); return done&&done(); 
+      var posterP = Promise.resolve(null);
+      var mime = file.type||'application/octet-stream';
+      if (isVid(mime, file.name)) {
+        posterP = Promise.race([
+          extractVideoThumbnail(file),
+          new Promise(function(resolve){ setTimeout(function(){ resolve(null); }, 3000); })
+        ]);
       }
-      
-      // (Optional) Asynchronously send a poster in a separate message if available.
-      // This part is a non-blocking enhancement. The core sending will proceed regardless.
-      if (isVid(file.type, file.name)) {
-        extractVideoThumbnail(file, function(poster) {
-            if (poster && self.conns[pid] && self.conns[pid].open) {
-                try {
-                    c.send({ type: 'file-poster', id: id, poster: poster });
-                } catch (e) { /* Ignore poster send error */ }
+
+      posterP.then(function(poster){
+        try{
+          c.send({type:'file-begin', id:id, name:file.name, size:file.size, mime:mime, chunk:chunk, hash:hash, poster:poster||null});
+        }catch(e){ self.log('文件元信息发送失败'); return done&&done(); }
+
+        st._curSend = st._curSend || {};
+        st._curSend[id] = { setOffset:function(n){ state.off = Math.max(0, Math.min(file.size, n|0)); } };
+
+        var reader=new FileReader();
+        reader.onerror=function(){ self.log('文件读取失败'); try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){} done&&done(); };
+        reader.onload=function(e){
+          flowSend(c,e.target.result,function(err){
+            if(err){ self.log('数据发送失败'); delete st._curSend[id]; return done&&done(); }
+            state.off += e.target.result.byteLength;
+            var pct=Math.min(100,Math.floor(state.off*100/file.size));
+            var nowTs=Date.now();
+            if(pct!==lastPct && (nowTs-lastTs>300 || pct===100)){ lastTs=nowTs; lastPct=pct; }
+            if(state.off<file.size){ setTimeout(readNext,0); }
+            else {
+              try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){}
+              delete st._curSend[id];
+
+              try{
+                idbPutFull(hash||'', file, {name:file.name,size:file.size,mime:mime});
+                self.fullSources[hash||'']=self.fullSources[hash||'']||new Set();
+                self.fullSources[hash||''].add(self.localId);
+              }catch(e){}
+
+              done&&done();
             }
-        });
-      }
-      
-      // 2. Resume logic and file reading proceeds immediately, no longer in a .then() block.
-      st._curSend = st._curSend || {};
-      st._curSend[id] = { setOffset:function(n){ state.off = Math.max(0, Math.min(file.size, n|0)); } };
-
-      var reader=new FileReader();
-      reader.onerror=function(){ self.log('文件读取失败'); try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){} done&&done(); };
-      reader.onload=function(e){
-        flowSend(c,e.target.result,function(err){
-          if(err){ self.log('数据发送失败'); delete st._curSend[id]; return done&&done(); }
-          state.off += e.target.result.byteLength;
-          
-          if(state.off<file.size){ 
-            setTimeout(readNext,0); 
-          } else {
-            try{ c.send({type:'file-end', id:id, hash:hash}); }catch(e){}
-            delete st._curSend[id];
-            try{
-              idbPutFull(hash||'', file, {name:file.name,size:file.size,mime:file.type||'application/octet-stream'});
-              self.fullSources[hash||'']=self.fullSources[hash||'']||new Set();
-              self.fullSources[hash||''].add(self.localId);
-            }catch(e){}
-            done&&done();
-          }
-        });
-      };
-      function readNext(){
-        var slice=file.slice(state.off,Math.min(state.off+chunk,file.size));
-        reader.readAsArrayBuffer(slice);
-      }
-      readNext();
+          });
+        };
+        function readNext(){
+          var slice=file.slice(state.off,Math.min(state.off+chunk,file.size));
+          reader.readAsArrayBuffer(slice);
+        }
+        readNext();
+      }).catch(function(){ done&&done(); });
     }
 
     self.toggle=function(){
@@ -394,7 +497,7 @@
     function connect(){
       setStatus('连接中…'); self.log('开始连接…');
       try{
-        var p=new Peer(null,{host:self.server.host,port:self.server.port,secure:self.server.secure,path:self.server.path,config:{iceServers:self.iceServers}});
+        var p=new Peer(null,{host:self.server.host,port:self.server.port,secure:self.server.secure,path:self.server.path||'/',config:{iceServers:self.iceServers}});
         self.peer=p;
       }catch(e){ self.log('初始化失败：'+e.message); setStatus('离线'); return; }
 
@@ -516,8 +619,6 @@
             var h=d.hash||'';
             var ui=placeholder(d.name||'文件', d.size||0, false);
 
-            if (isVid(d.mime, d.name) && d.poster){ ui.poster = d.poster; showVid(ui,'#','等待数据…'); }
-
             if(h){
               idbGetFull(h, function(rec){
                 if(rec && rec.blob){
@@ -525,7 +626,8 @@
                   var m=(rec.meta&&rec.meta.mime)||'';
                   var n=(rec.meta&&rec.meta.name)||d.name||'文件';
                   if (isImg(m,n)) showImg(ui,url);
-                  else if (isVid(m,n)) showVid(ui,url,'本地缓存');
+                  else if (isVid(m,n) && canPlayVideo(m,n)) showVid(ui,url,'本地缓存', d.poster||null);
+                  else if (isAudio(m,n) && canPlayAudio(m,n)) showAud(ui,url,'本地缓存');
                   else fileLink(ui,url,n,(rec.meta&&rec.meta.size)||d.size||0);
                   try{ c.send({type:'file-end',id:d.id,hash:h}); }catch(e){}
                   return;
@@ -540,26 +642,9 @@
 
             self.conns[pid].recv.cur={
               id:d.id, name:d.name, size:d.size||0, mime:d.mime||'application/octet-stream',
-              got:0, parts:[], previewed:false, previewUrl:null, videoState:null, hash:h, poster:d.poster||null
+              got:0, parts:[], previewed:false, previewUrl:null, mediaState:null, hash:h, poster:d.poster||null, lastSaved:0
             };
             self.conns[pid].recv.ui=ui;
-          }
-          // ========================================================================
-          //   FIXED: Handle the new `file-poster` message
-          // ========================================================================
-          else if (d.type === 'file-poster') {
-            var st = self.conns[pid];
-            if (st && st.recv && st.recv.cur && st.recv.cur.id === d.id) {
-              var ui = st.recv.ui;
-              var ctx = st.recv.cur;
-              if (ui && d.poster) {
-                ui.poster = d.poster;
-                ctx.poster = d.poster;
-                if (!ctx.previewed && isVid(ctx.mime, ctx.name)) {
-                  showVid(ui, '#', '等待数据…');
-                }
-              }
-            }
           }
           else if(d.type==='file-end'){
             finalizeReceive(pid,d.id,d.hash||'');
@@ -594,24 +679,44 @@
             var url=mkUrl(new Blob(ctx.parts,{type:ctx.mime}));
             if (isImg(ctx.mime, ctx.name)){
               showImg(ui,url); ctx.previewed=true; ctx.previewUrl=url;
-            } else if (isVid(ctx.mime, ctx.name)){
+            } else if (isVid(ctx.mime, ctx.name) && canPlayVideo(ctx.mime, ctx.name)){
               var need=Math.max(1,Math.floor(ctx.size*self.previewPct/100));
               if(ctx.got>=need){
-                showVid(ui,url,'可预览（接收中 '+pct+'%）'); ctx.previewed=true; ctx.previewUrl=url;
-                try{
+                showVid(ui,url,'可预览（接收中 '+pct+'%）', ctx.poster||null);
+                ctx.previewed=true; 
+                ctx.previewUrl=url;
+                ctx.mediaState = {time:0, paused:true, kind:'video'};
+                setTimeout(function(){
                   var vw = ui && ui.mediaWrap && ui.mediaWrap.querySelector && ui.mediaWrap.querySelector('video');
                   if (vw){
-                    ctx.videoState = {time:0, paused:true};
-                    vw.addEventListener('timeupdate', function(){ ctx.videoState.time = vw.currentTime||0; ctx.videoState.paused = vw.paused; });
+                    vw.addEventListener('timeupdate', function(){ if(ctx.mediaState) ctx.mediaState.time = vw.currentTime||0; });
+                    vw.addEventListener('play', function(){ if(ctx.mediaState) ctx.mediaState.paused = false; });
+                    vw.addEventListener('pause', function(){ if(ctx.mediaState) ctx.mediaState.paused = true; });
                   }
-                }catch(e){}
+                }, 100);
+              }
+            } else if (isAudio(ctx.mime, ctx.name) && canPlayAudio(ctx.mime, ctx.name)){
+              var needA=Math.max(1,Math.floor(ctx.size*self.previewPct/100));
+              if(ctx.got>=needA){
+                showAud(ui,url,'可预览（接收中 '+pct+'%）');
+                ctx.previewed=true;
+                ctx.previewUrl=url;
+                ctx.mediaState = {time:0, paused:true, kind:'audio'};
+                setTimeout(function(){
+                  var aw = ui && ui.mediaWrap && ui.mediaWrap.querySelector && ui.mediaWrap.querySelector('audio');
+                  if (aw){
+                    aw.addEventListener('timeupdate', function(){ if(ctx.mediaState) ctx.mediaState.time = aw.currentTime||0; });
+                    aw.addEventListener('play', function(){ if(ctx.mediaState) ctx.mediaState.paused = false; });
+                    aw.addEventListener('pause', function(){ if(ctx.mediaState) ctx.mediaState.paused = true; });
+                  }
+                }, 100);
               }
             }
           }catch(e){}
         }
 
-        if(ctx.hash && ctx.got>0 && (ctx.got % (2*1024*1024) < sz)){
-          try{ idbPutPart(ctx.hash,{name:ctx.name,size:ctx.size,mime:ctx.mime, got:ctx.got}); }catch(e){}
+        if(ctx.hash && ctx.got - (ctx.lastSaved||0) >= PART_FLUSH){
+          try{ idbPutPart(ctx.hash,{name:ctx.name,size:ctx.size,mime:ctx.mime, got:ctx.got}); ctx.lastSaved = ctx.got; }catch(e){}
         }
       });
 
@@ -624,7 +729,7 @@
         }
       });
 
-      c.on('error', function(err){ /* 忽略 */ });
+      c.on('error', function(err){});
     }
 
     function finalizeReceive(pid,id,hash){
@@ -633,28 +738,50 @@
       if(!ctx||ctx.id!==id) return;
 
       var blob=new Blob(ctx.parts,{type:ctx.mime});
-      var url=mkUrl(blob);
+      var newUrl=mkUrl(blob);
 
-      if (isImg(ctx.mime, ctx.name)) showImg(ui,url);
-      else if (isVid(ctx.mime, ctx.name)){
-        if (ui && ctx.poster) ui.poster = ctx.poster;
-        showVid(ui,url,'接收完成');
-        try{
-          if (ctx.videoState){
-            var vw = ui && ui.mediaWrap && ui.mediaWrap.querySelector && ui.mediaWrap.querySelector('video');
-            if (vw){
-              vw.addEventListener('loadedmetadata', function(){
-                try{
-                  if (typeof ctx.videoState.time==='number') vw.currentTime = Math.min(ctx.videoState.time||0, (vw.duration||ctx.videoState.time||0));
-                  if (!ctx.videoState.paused) vw.play().catch(function(){});
-                }catch(e){}
-              }, {once:true});
-            }
-          }
-        }catch(e){}
-      } else {
-        fileLink(ui,url,ctx.name,ctx.size);
+      if (isImg(ctx.mime, ctx.name)) {
+        showImg(ui,newUrl);
       }
+      else if (isVid(ctx.mime, ctx.name) && canPlayVideo(ctx.mime, ctx.name)){
+        var savedTime = (ctx.mediaState && ctx.mediaState.time) || 0;
+        var wasPaused = (ctx.mediaState && ctx.mediaState.paused) || true;
+        showVid(ui, newUrl, '接收完成', ctx.poster||null);
+        setTimeout(function(){
+          var vw = ui && ui.mediaWrap && ui.mediaWrap.querySelector && ui.mediaWrap.querySelector('video');
+          if (vw && savedTime > 0){
+            vw.addEventListener('loadedmetadata', function(){
+              try{
+                vw.currentTime = Math.min(savedTime, vw.duration || savedTime);
+                if (!wasPaused) vw.play().catch(function(){});
+              }catch(e){}
+            }, {once:true});
+          }
+        }, 100);
+      }
+      else if (isAudio(ctx.mime, ctx.name) && canPlayAudio(ctx.mime, ctx.name)){
+        var asaved = (ctx.mediaState && ctx.mediaState.time) || 0;
+        var apaused = (ctx.mediaState && ctx.mediaState.paused) || true;
+        showAud(ui, newUrl, '接收完成');
+        setTimeout(function(){
+          var aw = ui && ui.mediaWrap && ui.mediaWrap.querySelector && ui.mediaWrap.querySelector('audio');
+          if (aw && asaved > 0){
+            aw.addEventListener('loadedmetadata', function(){
+              try{
+                aw.currentTime = Math.min(asaved, aw.duration || asaved);
+                if (!apaused) aw.play().catch(function(){});
+              }catch(e){}
+            }, {once:true});
+          }
+        }, 100);
+      }
+      else {
+        fileLink(ui,newUrl,ctx.name,ctx.size);
+      }
+
+      try{
+        if(ctx.previewUrl && ctx.previewUrl !== newUrl) URL.revokeObjectURL(ctx.previewUrl);
+      }catch(e){}
 
       try{
         idbPutFull(hash||ctx.hash||'', blob, {name:ctx.name,size:ctx.size,mime:ctx.mime});
@@ -682,7 +809,7 @@
         var t=(h<10?'0':'')+h+':'+(m<10?'0':'')+m+':'+(sec<10?'0':'')+sec;
         var up=document.getElementById('uptime'); if(up) up.textContent=t;
         if (typeof window.updateEntryStatus === 'function'){
-          window.updateEntryStatus({connected:true, online:Object.keys(self.conns).filter(k=>self.conns[k].open).length, localId:self.localId, virtualIp:self.virtualIp, uptime:t});
+          window.updateEntryStatus({connected:true, online:Object.keys(self.conns).filter(function(k){return self.conns[k].open;}).length, localId:self.localId, virtualIp:self.virtualIp, uptime:t});
         }
       },1000);
 
@@ -731,7 +858,7 @@
       self._media = self._media || {};
       if (self._media.call || forceClose){
         try{ self._media.call && self._media.call.close(); }catch(e){}
-        if (self._media.local){ try{ self._media.local.getTracks().forEach(t=>t.stop()); }catch(e){} }
+        if (self._media.local){ try{ self._media.local.getTracks().forEach(function(t){t.stop();}); }catch(e){} }
         self._media.call=null; self._media.local=null;
         var rv=document.getElementById('remoteVideo'); if(rv) rv.srcObject=null;
         var lv=document.getElementById('localVideo');  if(lv) lv.srcObject=null;
@@ -751,9 +878,43 @@
       }).catch(function(){ alert('无法获取摄像头/麦克风'); });
     };
 
+    // -------------------- 免打扰（完全隐藏） --------------------
+    function isEmbedMode(){
+      try{
+        return !!document.getElementById('classicHost') || !!document.querySelector('[data-chat-root]') || !!window.__ENTRY_PAGE__;
+      }catch(e){ return false; }
+    }
+    function applyMuted(){
+      try{
+        var muted = !!self._muted;
+        var title = document.title||'';
+        if (muted && title.indexOf('🔕 ')!==0) document.title = '🔕 ' + title;
+        if (!muted && title.indexOf('🔕 ')===0) document.title = title.replace(/^🔕\s+/, '');
+        if (self.uiRoot){
+          if (isEmbedMode()){
+            self.uiRoot.style.display = muted ? 'none' : '';
+          } else {
+            // Standalone：仅折叠消息与输入区，保留顶部栏，避免无法恢复
+            var msgs = self.uiRoot.querySelector('.messages');
+            var send = self.uiRoot.querySelector('.send');
+            if (msgs) msgs.style.display = muted ? 'none' : '';
+            if (send) send.style.display = muted ? 'none' : '';
+          }
+        }
+      }catch(e){}
+    }
+    self.setMuted = function(flag){
+      self._muted = !!flag;
+      try{ localStorage.setItem('classicMuted', self._muted ? '1' : '0'); }catch(e){}
+      applyMuted();
+    };
+    self.hideUI = function(){ self.setMuted(true); };
+    self.showUI = function(){ self.setMuted(false); };
+
     return self;
   })();
 
+  // -------------------- 经典 UI 绑定 --------------------
   function bindClassicUI(app){
     if (!window.CLASSIC_UI) return;
     if (app.__uiBound) return;
@@ -768,6 +929,9 @@
     var sendArea = document.getElementById('sendArea');
     var statusChip = document.getElementById('statusChip');
     var onlineChip = document.getElementById('onlineChip');
+
+    var appRoot = document.querySelector('.app') || document.body;
+    app.uiRoot = appRoot;
 
     function textOfEditor(){
       if (!editor) return '';
@@ -802,10 +966,6 @@
         if (mine){ row.appendChild(bubble); row.appendChild(av); } else { row.appendChild(av); row.appendChild(bubble); }
         msgScroll.appendChild(row); msgScroll.scrollTop = msgScroll.scrollHeight;
       },
-      // ========================================================================
-      //   FIXED FUNCTION: placeholder
-      //   Displays "准备发送" for sender and "准备接收" for receiver.
-      // ========================================================================
       placeholder: function(name,size,mine){
         if(!msgScroll) return null;
         var row=document.createElement('div'); row.className='row'+(mine?' right':'');
@@ -814,10 +974,9 @@
         av.appendChild(lt);
         var bubble=document.createElement('div'); bubble.className='bubble file'+(mine?' me':'');
         var safe = String(name||'文件').replace(/"/g,'&quot;');
-        var progressText = mine ? '准备发送…' : '准备接收…'; // UI Fix
         bubble.innerHTML = '<div class="file-link"><div class="file-info"><span class="file-icon">📄</span>'
                          + '<span class="file-name" title="'+safe+'">'+safe+'</span></div>'
-                         + '<div class="progress-line">'+progressText+'</div></div>';
+                         + '<div class="progress-line">'+(mine?'准备发送…':'准备接收…')+'</div></div>';
         if (mine){ row.appendChild(bubble); row.appendChild(av); } else { row.appendChild(av); row.appendChild(bubble); }
         msgScroll.appendChild(row); msgScroll.scrollTop=msgScroll.scrollHeight;
         return {root:row, progress:bubble.querySelector('.progress-line'), mediaWrap:bubble};
@@ -828,13 +987,33 @@
         ui.mediaWrap.innerHTML = '<a href="'+url+'" target="_blank" rel="noopener" class="thumb-link">'
                                + '<img class="thumb img" src="'+url+'"></a>';
       },
-      showVideo: function(ui,url,info){
+      showVideo: function(ui,url,info,poster){
         if(!ui||!ui.mediaWrap) return;
         ui.mediaWrap.classList.add('media');
-        var bg = ui.poster ? ' style="background-image:url('+ui.poster+')"':'';
-        ui.mediaWrap.innerHTML = '<a href="'+url+'" target="_blank" rel="noopener" class="thumb-link">'
-                               + '<div class="thumb video"'+bg+'><div class="play">▶</div></div></a>'
-                               + (info?'<div class="progress-line">'+info+'</div>':'');
+        var posterAttr = poster ? ' poster="'+poster+'"' : '';
+        // 不可播放时降级为下载
+        var can = (function(){ try{ var v=document.createElement('video'); return v && v.canPlayType && (v.canPlayType('video/mp4')||v.canPlayType('video/webm')); }catch(e){ return false; } })();
+        if (!can){
+          ui.mediaWrap.innerHTML = '<a href="'+url+'" target="_blank" rel="noopener" class="file-link">'
+                                 + '<div class="file-info"><span class="file-icon">📄</span><span class="file-name">视频</span></div>'
+                                 + '<div class="progress-line">'+(info||'点击下载播放')+'</div></a>';
+        } else {
+          ui.mediaWrap.innerHTML = '<video controls preload="metadata" src="'+url+'"'+posterAttr+' style="width:var(--thumb);border-radius:8px;background:#000"></video>'
+                                 + (info?'<div class="progress-line">'+info+'</div>':'');
+        }
+      },
+      showAudio: function(ui,url,info){
+        if(!ui||!ui.mediaWrap) return;
+        ui.mediaWrap.classList.add('media');
+        var can = (function(){ try{ var a=document.createElement('audio'); return a && a.canPlayType; }catch(e){ return false; } })();
+        if (!can){
+          ui.mediaWrap.innerHTML = '<a href="'+url+'" target="_blank" rel="noopener" class="file-link">'
+                                 + '<div class="file-info"><span class="file-icon">📄</span><span class="file-name">音频</span></div>'
+                                 + '<div class="progress-line">'+(info||'点击下载播放')+'</div></a>';
+        } else {
+          ui.mediaWrap.innerHTML = '<audio controls preload="metadata" src="'+url+'" style="width:var(--thumb)"></audio>'
+                                 + (info?'<div class="progress-line">'+info+'</div>':'');
+        }
       },
       showFileLink: function(ui,url,name,size){
         if(!ui||!ui.mediaWrap) return;
@@ -888,6 +1067,7 @@
       }
     };
 
+    // 编辑器交互
     if (editor){
       editor.addEventListener('input', syncSendBtn);
       var composing=false;
@@ -940,8 +1120,69 @@
     })();
 
     app._classic.updateStatus();
+
+    // 绑定“免打扰”点击（完全隐藏）
+    (function bindMuteChip(){
+      try{
+        var header = document.querySelector('.header');
+        if(!header) return;
+        var chips = header.querySelectorAll('.chip');
+        var target=null;
+        for(var i=0;i<chips.length;i++){
+          if((chips[i].textContent||'').indexOf('免打扰')!==-1){ target=chips[i]; break; }
+        }
+        if(target){
+          target.addEventListener('click', function(){
+            app.hideUI(); // 完全隐藏（在首页/嵌入模式下隐藏整个UI；独立页面折叠消息与输入区）
+          });
+        }
+      }catch(e){}
+    })();
+
+    // 恢复免打扰状态
+    (function restoreMuted(){
+      try{
+        var v=localStorage.getItem('classicMuted');
+        var muted = v === '1';
+        app._muted = muted;
+        // 初次绑定后，按场景应用
+        setTimeout(function(){ 
+          app.uiRoot = app.uiRoot || document.querySelector('.app') || document.body;
+          (function(){ try{ app._muted = !!(localStorage.getItem('classicMuted')==='1'); }catch(e){} })();
+          (function(){ try{ app._muted = app._muted && isEmbedMode(); }catch(e){} })(); // 独立页面默认不隐藏整个 UI，避免“找不回”
+          var title = document.title||'';
+          if (!isEmbedMode() && app._muted){
+            // 独立页：仅折叠消息与输入，保留头部（防止无法恢复）
+            app._muted = true;
+          }
+          (function(){ try{ app._muted = !!app._muted; }catch(e){} })();
+          (function(){ try{ if(!isEmbedMode() && app._muted){ /* ok */ } }catch(e){} })();
+          // 应用
+          var apply=function(){
+            try{
+              var muted = !!app._muted;
+              var title = document.title||'';
+              if (muted && title.indexOf('🔕 ')!==0) document.title = '🔕 ' + title;
+              if (!muted && title.indexOf('🔕 ')===0) document.title = title.replace(/^🔕\s+/, '');
+              if (app.uiRoot){
+                if (isEmbedMode()){
+                  app.uiRoot.style.display = muted ? 'none' : '';
+                } else {
+                  var msgs = app.uiRoot.querySelector('.messages');
+                  var send = app.uiRoot.querySelector('.send');
+                  if (msgs) msgs.style.display = muted ? 'none' : '';
+                  if (send) send.style.display = muted ? 'none' : '';
+                }
+              }
+            }catch(e){}
+          };
+          apply();
+        }, 0);
+      }catch(e){}
+    })();
   }
 
+  // -------------------- 启动/注入 --------------------
   if (window.CLASSIC_UI && window.opener) {
     (function waitOpener(){
       try{
